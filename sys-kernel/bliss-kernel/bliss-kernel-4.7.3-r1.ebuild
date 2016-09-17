@@ -15,7 +15,7 @@ _BD="/boot/kernels/${_PLV}"     # Kernel /boot Directory
 # Main
 DESCRIPTION="Precompiled Vanilla Kernel (Kernel Ready-to-Eat [KRE])"
 HOMEPAGE="http://xyinn.org/"
-SRC_URI="http://xyinn.org/gentoo/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
+SRC_URI="http://xyinn.org:8080/gentoo/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
 
 RESTRICT="mirror strip"
 LICENSE="GPL-2"
