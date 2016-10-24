@@ -20,7 +20,7 @@ LICENSE="MPL-2.0"
 SLOT="0"
 KEYWORDS="~x86 ~amd64"
 
-DEPEND=">=dev-lang/go-1.6"
+DEPEND=">=dev-lang/go-1.7"
 
 S="${WORKDIR}"
 
