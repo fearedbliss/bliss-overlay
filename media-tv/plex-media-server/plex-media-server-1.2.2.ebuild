@@ -24,7 +24,7 @@ SRC_URI="
 SLOT="0"
 LICENSE="PlexMediaServer"
 RESTRICT="mirror strip"
-KEYWORDS="-* ~amd64"
+KEYWORDS="-* amd64"
 IUSE="hardened"
 
 DEPEND="net-dns/avahi"

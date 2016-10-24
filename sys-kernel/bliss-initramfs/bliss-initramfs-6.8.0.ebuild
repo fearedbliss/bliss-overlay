@@ -14,7 +14,7 @@ SRC_URI="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/${GITHUB_TAG}.
 RESTRICT="mirror strip"
 LICENSE="MPL-2.0"
 SLOT="0"
-KEYWORDS="-* ~amd64"
+KEYWORDS="-* amd64"
 IUSE="luks raid lvm zfs"
 
 RDEPEND="
@@ -24,8 +24,8 @@ RDEPEND="
 
     luks? ( sys-fs/cryptsetup
             app-crypt/gnupg )
-
     raid? ( sys-fs/mdadm )
+
     lvm? ( sys-fs/lvm2 )
 
     zfs? ( sys-kernel/spl
