@@ -15,13 +15,13 @@ _BD="/boot/kernels/${_PLV}"     # Kernel /boot Directory
 
 # Main
 DESCRIPTION="Precompiled Vanilla Kernel (Kernel Ready-to-Eat [KRE])"
-HOMEPAGE="http://xyinn.org:8080/"
-SRC_URI="http://xyinn.org:8080/gentoo/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
+HOMEPAGE="https://wiki.gentoo.org/wiki/User:Fearedbliss"
+SRC_URI="https://dev.gentoo.org/~fearedbliss/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
 
-RESTRICT="mirror strip"
+RESTRICT="strip"
 LICENSE="GPL-2"
 SLOT="${_PLV}"
-KEYWORDS="-* ~amd64"
+KEYWORDS="-* amd64"
 
 S="${WORKDIR}"
 QA_PREBUILT="*"
