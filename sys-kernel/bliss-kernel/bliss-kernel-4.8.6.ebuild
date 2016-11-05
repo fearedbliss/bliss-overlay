@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v2
 # $Id$
 
-EAPI=5
+EAPI=6
 
 inherit eutils mount-boot
 
@@ -24,6 +24,7 @@ SLOT="${_PLV}"
 KEYWORDS="-* ~amd64"
 
 S="${WORKDIR}"
+QA_PREBUILT="*"
 
 src_compile()
 {
@@ -48,11 +49,11 @@ src_install()
 
 	# Install Modules
 	dodir /lib/modules
-	cp -r "${S}/modules/${_PLV}" "${D}/lib/modules"
+	cp -r "${S}/modules/${_PLV}" "${D}/lib/modules" || die
 
 	# Install Headers
 	dodir /usr/src
-	cp -r "${S}/headers/${_KN}" "${D}/usr/src"
+	cp -r "${S}/headers/${_KN}" "${D}/usr/src" || die
 }
 
 pkg_postinst()
@@ -67,6 +68,6 @@ pkg_postinst()
 
 	if [[ ! -e "/usr/src/linux" ]]; then
 		einfo "Creating symlink to ${_KD}"
-		cd /usr/src && ln -sf ${_KN} linux
+		cd /usr/src && ln -sf ${_KN} linux || die
 	fi
 }

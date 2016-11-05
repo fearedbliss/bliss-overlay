@@ -1,7 +1,8 @@
-# Copyright 2013-2016 Jonathan Vasquez <jvasquez1011@gmail.com>
+# Copyright 1999-2016 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
+# $Id$
 
-EAPI=5
+EAPI=6
 
 GITHUB_USER="fearedbliss"
 GITHUB_REPO="bliss-initramfs"
@@ -18,35 +19,36 @@ KEYWORDS="-* amd64"
 IUSE="luks raid lvm zfs"
 
 RDEPEND="
-    >=dev-lang/python-3.3
-    app-arch/cpio
-    virtual/udev
+	>=dev-lang/python-3.3
+	app-arch/cpio
+	virtual/udev
 
-    luks? ( sys-fs/cryptsetup
-            app-crypt/gnupg )
-    raid? ( sys-fs/mdadm )
+	luks? ( sys-fs/cryptsetup
+			app-crypt/gnupg )
 
-    lvm? ( sys-fs/lvm2 )
+	raid? ( sys-fs/mdadm )
 
-    zfs? ( sys-kernel/spl
-           sys-fs/zfs
-           sys-fs/zfs-kmod )"
+	lvm? ( sys-fs/lvm2 )
+
+	zfs? ( sys-kernel/spl
+		   sys-fs/zfs
+		   sys-fs/zfs-kmod )"
 
 S="${WORKDIR}/${GITHUB_REPO}-${GITHUB_TAG}"
 
 src_install() {
-    # Copy the main executable
-    local executable="mkinitrd.py"
-    exeinto "/opt/${PN}"
-    doexe "${executable}"
+	# Copy the main executable
+	local executable="mkinitrd.py"
+	exeinto "/opt/${PN}"
+	doexe "${executable}"
 
-    # Copy the libraries required by this executable
-    cp -r "${S}/files" "${D}/opt/${PN}"
-    cp -r "${S}/pkg" "${D}/opt/${PN}"
+	# Copy the libraries required by this executable
+	cp -r "${S}/files" "${D}/opt/${PN}" || die
+	cp -r "${S}/pkg" "${D}/opt/${PN}" || die
 
-    # Copy documentation files
-    dodoc CHANGES README USAGE
+	# Copy documentation files
+	dodoc CHANGES README USAGE
 
-    # Make a symbolic link: /sbin/bliss-initramfs
-    dosym "/opt/${PN}/${executable}" "/sbin/${PN}"
+	# Make a symbolic link: /sbin/bliss-initramfs
+	dosym "/opt/${PN}/${executable}" "/sbin/${PN}"
 }
