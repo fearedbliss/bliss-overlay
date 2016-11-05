@@ -15,7 +15,7 @@ IUSE="firmware"
 
 DEPEND="firmware? ( sys-kernel/linux-firmware )"
 RDEPEND="|| (
-		sys-kernel/bliss-kernel-bin
+		sys-kernel/bliss-kernel
 		sys-kernel/gentoo-sources
 		sys-kernel/vanilla-sources
 		sys-kernel/ck-sources
