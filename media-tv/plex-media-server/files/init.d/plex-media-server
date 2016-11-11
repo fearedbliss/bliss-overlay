@@ -1,4 +1,4 @@
-#!/sbin/runscript
+#!/sbin/openrc-run
 
 depend() {
 	need avahi-daemon
@@ -16,6 +16,5 @@ stop() {
 
 	# Remove stale pid file since this is a dirty solution
 	rm ${PLEX_PIDFILE}
-
 	eend $?
 }
