@@ -1,5 +1,6 @@
-# Copyright 2014-2016 Jonathan Vasquez <jvasquez1011@gmail.com>
+# Copyright 1999-2016 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
+# $Id$
 
 EAPI=5
 
@@ -18,7 +19,7 @@ SRC_URI="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/v${GITHUB_TAG}
 RESTRICT="mirror"
 LICENSE="MPL-2.0"
 SLOT="0"
-KEYWORDS="~x86 amd64"
+KEYWORDS="~x86 ~amd64"
 
 DEPEND=">=dev-lang/go-1.7"
 
