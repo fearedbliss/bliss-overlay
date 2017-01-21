@@ -1,4 +1,4 @@
-# Copyright 1999-2016 Gentoo Foundation
+# Copyright 1999-2017 Gentoo Foundation
 # Distributed under the terms of the GNU General Public License v2
 # $Id$
 
@@ -16,12 +16,12 @@ _BD="/boot/kernels/${_PLV}"     # Kernel /boot Directory
 # Main
 DESCRIPTION="Precompiled Vanilla Kernel (Kernel Ready-to-Eat [KRE])"
 HOMEPAGE="https://wiki.gentoo.org/wiki/User:Fearedbliss"
-SRC_URI="https://dev.gentoo.org/~fearedbliss/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
+SRC_URI="http://xyinn.org/gentoo/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
 
 RESTRICT="mirror strip"
 LICENSE="GPL-2"
 SLOT="${_PLV}"
-KEYWORDS="-* ~amd64"
+KEYWORDS="-* amd64"
 
 S="${WORKDIR}"
 QA_PREBUILT="*"
