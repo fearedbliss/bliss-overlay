@@ -14,7 +14,7 @@ else
 	N="${PN}-${NV}"
 	S="${WORKDIR}/${PN}-${PV%_rc3}"
 	SRC_URI="https://github.com/zfsonlinux/${PN}/releases/download/${N}/${N}.tar.gz"
-	KEYWORDS=" ~amd64"
+	KEYWORDS=""
 fi
 
 inherit autotools-utils bash-completion-r1 flag-o-matic linux-info python-r1 systemd toolchain-funcs udev

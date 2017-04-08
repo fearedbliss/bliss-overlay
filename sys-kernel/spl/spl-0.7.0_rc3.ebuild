@@ -13,7 +13,7 @@ else
 	N=${PN}-${NV}
 	S="${WORKDIR}/${PN}-${PV%_rc3}"
 	SRC_URI="https://github.com/zfsonlinux/zfs/releases/download/zfs-${NV}/${N}.tar.gz -> ${P}.tar.gz"
-	KEYWORDS=" ~amd64"
+	KEYWORDS=""
 fi
 
 inherit flag-o-matic linux-info linux-mod autotools-utils
