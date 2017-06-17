@@ -6,9 +6,10 @@ EAPI=6
 
 inherit eutils
 
-# When updating ebuild, make sure to manually edit the kernel config
-# file and remove the text in CONFIG_INITRAMFS_SOURCE, and set the
-# CONFIG_LOCALVERSION to the value in $TAIL.
+# When updating ebuild, manually edit kernel config:
+# 1. Remove text in CONFIG_INITRAMFS_SOURCE
+# 2. Set CONFIG_LOCALVERSION to the value in $TAIL
+# 3. Unset CONFIG_STACK_VALIDATION
 
 # For System Rescue CD 5.0.2 (Standard Kernel - x86_64)
 TAIL="std502-amd64"
