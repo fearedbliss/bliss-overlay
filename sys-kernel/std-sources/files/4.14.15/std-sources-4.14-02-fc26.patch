@@ -1,0 +1,4763 @@
+diff -urN linux-4.14-01/arch/arm/include/asm/barrier.h linux-4.14-02/arch/arm/include/asm/barrier.h
+--- linux-4.14-01/arch/arm/include/asm/barrier.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/arm/include/asm/barrier.h	2018-01-29 14:51:49.956155305 +0000
+@@ -37,6 +37,81 @@
+ #define dmb(x) __asm__ __volatile__ ("" : : : "memory")
+ #endif
+ 
++#ifdef CONFIG_THUMB2_KERNEL
++#define __load_no_speculate_n(ptr, lo, hi, failval, cmpptr, sz)	\
++({								\
++	typeof(*ptr) __nln_val;					\
++	typeof(*ptr) __failval =				\
++		(typeof(*ptr))(unsigned long)(failval);		\
++								\
++	asm volatile (						\
++	"	cmp	%[c], %[l]\n"				\
++	"	it	hs\n"					\
++	"	cmphs	%[h], %[c]\n"				\
++	"	blo	1f\n"					\
++	"	ld" #sz " %[v], %[p]\n"				\
++	"1:	it	lo\n"					\
++	"	movlo	%[v], %[f]\n"				\
++	"	.inst 0xf3af8014 @ CSDB\n"			\
++	: [v] "=&r" (__nln_val)					\
++	: [p] "m" (*(ptr)), [l] "r" (lo), [h] "r" (hi),		\
++	  [f] "r" (__failval), [c] "r" (cmpptr)			\
++	: "cc");						\
++								\
++	__nln_val;						\
++})
++#else
++#define __load_no_speculate_n(ptr, lo, hi, failval, cmpptr, sz)	\
++({								\
++	typeof(*ptr) __nln_val;					\
++	typeof(*ptr) __failval =				\
++		(typeof(*ptr))(unsigned long)(failval);		\
++								\
++	asm volatile (						\
++	"	cmp	%[c], %[l]\n"				\
++	"	cmphs	%[h], %[c]\n"				\
++	"	ldr" #sz "hi %[v], %[p]\n"			\
++	"	movls	%[v], %[f]\n"				\
++	"	.inst 0xe320f014 @ CSDB\n"			\
++	: [v] "=&r" (__nln_val)					\
++	: [p] "m" (*(ptr)), [l] "r" (lo), [h] "r" (hi),		\
++	  [f] "r" (__failval), [c] "r" (cmpptr)			\
++	: "cc");						\
++								\
++	__nln_val;						\
++})
++#endif
++
++#define __load_no_speculate(ptr, lo, hi, failval, cmpptr)		\
++({									\
++	typeof(*(ptr)) __nl_val;					\
++									\
++	switch (sizeof(__nl_val)) {					\
++	case 1:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, b);		\
++		break;							\
++	case 2:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, h);		\
++		break;							\
++	case 4:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, );		\
++		break;							\
++	default:							\
++		BUILD_BUG();						\
++	}								\
++									\
++	__nl_val;							\
++})
++
++#define nospec_ptr(ptr, lo, hi)						\
++({									\
++	typeof(ptr) __np_ptr = (ptr);					\
++	__load_no_speculate(&__np_ptr, lo, hi, 0, __np_ptr);		\
++})
++
+ #ifdef CONFIG_ARM_HEAVY_MB
+ extern void (*soc_mb)(void);
+ extern void arm_heavy_mb(void);
+diff -urN linux-4.14-01/arch/arm/include/asm/crash-driver.h linux-4.14-02/arch/arm/include/asm/crash-driver.h
+--- linux-4.14-01/arch/arm/include/asm/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/arch/arm/include/asm/crash-driver.h	2018-01-29 14:51:49.774154452 +0000
+@@ -0,0 +1,6 @@
++#ifndef _ARM_CRASH_H
++#define _ARM_CRASH_H
++
++#include <asm-generic/crash-driver.h>
++
++#endif /* _ARM_CRASH_H */
+diff -urN linux-4.14-01/arch/arm64/include/asm/barrier.h linux-4.14-02/arch/arm64/include/asm/barrier.h
+--- linux-4.14-01/arch/arm64/include/asm/barrier.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/arm64/include/asm/barrier.h	2018-01-29 14:51:49.956155305 +0000
+@@ -38,6 +38,61 @@
+ #define dma_rmb()	dmb(oshld)
+ #define dma_wmb()	dmb(oshst)
+ 
++#define __load_no_speculate_n(ptr, lo, hi, failval, cmpptr, w, sz)	\
++({									\
++	typeof(*ptr)	__nln_val;					\
++	typeof(*ptr)	__failval = 					\
++		(typeof(*ptr))(unsigned long)(failval);			\
++									\
++	asm volatile (							\
++	"	cmp	%[c], %[l]\n"					\
++	"	ccmp	%[c], %[h], 2, cs\n"				\
++	"	b.cs	1f\n"						\
++	"	ldr" #sz " %" #w "[v], %[p]\n"				\
++	"1:	csel	%" #w "[v], %" #w "[v], %" #w "[f], cc\n"	\
++	"	hint	#0x14 // CSDB\n"				\
++	: [v] "=&r" (__nln_val)						\
++	: [p] "m" (*(ptr)), [l] "r" (lo), [h] "r" (hi),			\
++	  [f] "rZ" (__failval), [c] "r" (cmpptr)			\
++	: "cc");							\
++									\
++	__nln_val;							\
++})
++
++#define __load_no_speculate(ptr, lo, hi, failval, cmpptr)		\
++({									\
++	typeof(*(ptr)) __nl_val;					\
++									\
++	switch (sizeof(__nl_val)) {					\
++	case 1:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, w, b);		\
++		break;							\
++	case 2:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, w, h);		\
++		break;							\
++	case 4:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, w, );		\
++		break;							\
++	case 8:								\
++		__nl_val = __load_no_speculate_n(ptr, lo, hi, failval,	\
++						 cmpptr, x, );		\
++		break;							\
++	default:							\
++		BUILD_BUG();						\
++	}								\
++									\
++	__nl_val;							\
++})
++
++#define nospec_ptr(ptr, lo, hi)						\
++({									\
++	typeof(ptr) __np_ptr = (ptr);					\
++	__load_no_speculate(&__np_ptr, lo, hi, 0, __np_ptr);		\
++})
++
+ #define __smp_mb()	dmb(ish)
+ #define __smp_rmb()	dmb(ishld)
+ #define __smp_wmb()	dmb(ishst)
+diff -urN linux-4.14-01/arch/arm64/include/asm/crash-driver.h linux-4.14-02/arch/arm64/include/asm/crash-driver.h
+--- linux-4.14-01/arch/arm64/include/asm/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/arch/arm64/include/asm/crash-driver.h	2018-01-29 14:51:49.776154461 +0000
+@@ -0,0 +1,22 @@
++#ifndef _ARM64_CRASH_H
++#define _ARM64_CRASH_H
++
++#include <asm-generic/crash-driver.h>
++
++#define DEV_CRASH_ARCH_DATA _IOR('c', 1, long)
++
++static long
++crash_arch_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	extern u64 kimage_voffset;
++
++	switch (cmd)
++	{
++	case DEV_CRASH_ARCH_DATA:
++		return put_user(kimage_voffset, (unsigned long __user *)arg);
++	default:
++		return -EINVAL;
++	}
++}
++
++#endif /* _ARM64_CRASH_H */
+diff -urN linux-4.14-01/arch/arm64/kernel/vdso/Makefile linux-4.14-02/arch/arm64/kernel/vdso/Makefile
+--- linux-4.14-01/arch/arm64/kernel/vdso/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/arm64/kernel/vdso/Makefile	2018-01-29 14:51:49.722154208 +0000
+@@ -55,7 +55,8 @@
+ 
+ # Actual build commands
+ quiet_cmd_vdsold = VDSOL   $@
+-      cmd_vdsold = $(CC) $(c_flags) -Wl,-n -Wl,-T $^ -o $@
++      cmd_vdsold = $(CC) $(c_flags) -Wl,-n -Wl,-T $^ -o $@ \
++				    $(if $(AFTER_LINK),;$(AFTER_LINK))
+ quiet_cmd_vdsoas = VDSOA   $@
+       cmd_vdsoas = $(CC) $(a_flags) -c -o $@ $<
+ 
+diff -urN linux-4.14-01/arch/ia64/include/asm/crash-driver.h linux-4.14-02/arch/ia64/include/asm/crash-driver.h
+--- linux-4.14-01/arch/ia64/include/asm/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/arch/ia64/include/asm/crash-driver.h	2018-01-29 14:51:49.774154452 +0000
+@@ -0,0 +1,90 @@
++#ifndef _ASM_IA64_CRASH_H
++#define _ASM_IA64_CRASH_H
++
++/*
++ * linux/include/asm-ia64/crash-driver.h
++ *
++ * Copyright (c) 2004 Red Hat, Inc. All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2, or (at your option)
++ * any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ *
++ */
++
++#ifdef __KERNEL__
++
++#include <linux/efi.h>
++#include <linux/mm.h>
++#include <asm/mmzone.h>
++
++static inline void *
++map_virtual(u64 offset, struct page **pp)
++{
++	struct page *page;
++	unsigned long pfn;
++	u32 type;
++
++	if (REGION_NUMBER(offset) == 5) {
++		char byte;
++
++		if (__get_user(byte, (char *)offset) == 0)
++			return (void *)offset;
++		else
++			return NULL;
++	}
++
++	switch (type = efi_mem_type(offset))
++	{
++	case EFI_LOADER_CODE:
++	case EFI_LOADER_DATA:
++	case EFI_BOOT_SERVICES_CODE:
++	case EFI_BOOT_SERVICES_DATA:
++	case EFI_CONVENTIONAL_MEMORY:
++		break;
++
++	default:
++		printk(KERN_INFO
++		    "crash memory driver: invalid memory type for %lx: %d\n",
++			offset, type);
++		return NULL;
++	}
++
++	pfn = offset >> PAGE_SHIFT;
++
++	if (!pfn_valid(pfn)) {
++		printk(KERN_INFO
++			"crash memory driver: invalid pfn: %lx )\n", pfn);
++		return NULL;
++	}
++
++	page = pfn_to_page(pfn);
++
++	if (!page->virtual) {
++		printk(KERN_INFO
++		    "crash memory driver: offset: %lx page: %lx page->virtual: NULL\n",
++			offset, (unsigned long)page);
++		return NULL;
++	}
++
++	return (page->virtual + (offset & (PAGE_SIZE-1)));
++}
++
++static inline void unmap_virtual(struct page *page)
++{
++	return;
++}
++
++#endif /* __KERNEL__ */
++
++#endif /* _ASM_IA64_CRASH_H */
+diff -urN linux-4.14-01/arch/ia64/kernel/ia64_ksyms.c linux-4.14-02/arch/ia64/kernel/ia64_ksyms.c
+--- linux-4.14-01/arch/ia64/kernel/ia64_ksyms.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/ia64/kernel/ia64_ksyms.c	2018-01-29 14:51:49.774154452 +0000
+@@ -10,3 +10,6 @@
+ EXPORT_SYMBOL(min_low_pfn);	/* defined by bootmem.c, but not exported by generic code */
+ EXPORT_SYMBOL(max_low_pfn);	/* defined by bootmem.c, but not exported by generic code */
+ #endif
++
++#include <linux/efi.h>
++EXPORT_SYMBOL_GPL(efi_mem_type);
+diff -urN linux-4.14-01/arch/powerpc/include/asm/crash-driver.h linux-4.14-02/arch/powerpc/include/asm/crash-driver.h
+--- linux-4.14-01/arch/powerpc/include/asm/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/arch/powerpc/include/asm/crash-driver.h	2018-01-29 14:51:49.774154452 +0000
+@@ -0,0 +1,6 @@
++#ifndef _PPC64_CRASH_H
++#define _PPC64_CRASH_H
++
++#include <asm-generic/crash-driver.h>
++
++#endif /* _PPC64_CRASH_H */
+diff -urN linux-4.14-01/arch/powerpc/kernel/vdso32/Makefile linux-4.14-02/arch/powerpc/kernel/vdso32/Makefile
+--- linux-4.14-01/arch/powerpc/kernel/vdso32/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/powerpc/kernel/vdso32/Makefile	2018-01-29 14:51:49.722154208 +0000
+@@ -45,7 +45,8 @@
+ 
+ # actual build commands
+ quiet_cmd_vdso32ld = VDSO32L $@
+-      cmd_vdso32ld = $(CROSS32CC) $(c_flags) -o $@ -Wl,-T$(filter %.lds,$^) $(filter %.o,$^)
++      cmd_vdso32ld = $(CROSS32CC) $(c_flags) -o $@ -Wl,-T$(filter %.lds,$^) $(filter %.o,$^) \
++		     $(if $(AFTER_LINK),; $(AFTER_LINK))
+ quiet_cmd_vdso32as = VDSO32A $@
+       cmd_vdso32as = $(CROSS32CC) $(a_flags) -c -o $@ $<
+ 
+diff -urN linux-4.14-01/arch/powerpc/kernel/vdso64/Makefile linux-4.14-02/arch/powerpc/kernel/vdso64/Makefile
+--- linux-4.14-01/arch/powerpc/kernel/vdso64/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/powerpc/kernel/vdso64/Makefile	2018-01-29 14:51:49.723154213 +0000
+@@ -34,7 +34,8 @@
+ 
+ # actual build commands
+ quiet_cmd_vdso64ld = VDSO64L $@
+-      cmd_vdso64ld = $(CC) $(c_flags) -o $@ -Wl,-T$(filter %.lds,$^) $(filter %.o,$^)
++      cmd_vdso64ld = $(CC) $(c_flags) -o $@ -Wl,-T$(filter %.lds,$^) $(filter %.o,$^) \
++		    $(if $(AFTER_LINK),; $(AFTER_LINK))
+ 
+ # install commands for the unstripped file
+ quiet_cmd_vdso_install = INSTALL $@
+diff -urN linux-4.14-01/arch/s390/include/asm/crash-driver.h linux-4.14-02/arch/s390/include/asm/crash-driver.h
+--- linux-4.14-01/arch/s390/include/asm/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/arch/s390/include/asm/crash-driver.h	2018-01-29 14:51:49.774154452 +0000
+@@ -0,0 +1,60 @@
++#ifndef _S390_CRASH_H
++#define _S390_CRASH_H
++
++#ifdef __KERNEL__
++
++#include <linux/mm.h>
++#include <linux/highmem.h>
++
++/*
++ * For swapped prefix pages get bounce buffer using xlate_dev_mem_ptr()
++ */
++static inline void *map_virtual(u64 offset, struct page **pp)
++{
++	struct page *page;
++	unsigned long pfn;
++	void *vaddr;
++
++	vaddr = xlate_dev_mem_ptr(offset);
++	pfn = ((unsigned long) vaddr) >> PAGE_SHIFT;
++	if ((unsigned long) vaddr != offset)
++		page = pfn_to_page(pfn);
++	else
++		page = NULL;
++
++	if (!page_is_ram(pfn)) {
++		printk(KERN_INFO
++		    "crash memory driver: !page_is_ram(pfn: %lx)\n", pfn);
++		return NULL;
++	}
++
++	if (!pfn_valid(pfn)) {
++		printk(KERN_INFO
++		    "crash memory driver: invalid pfn: %lx )\n", pfn);
++		return NULL;
++	}
++
++	*pp = page;
++	return vaddr;
++}
++
++/*
++ * Free bounce buffer if necessary
++ */
++static inline void unmap_virtual(struct page *page)
++{
++	void *vaddr;
++
++	if (page) {
++		/*
++		 * Because for bounce buffers vaddr will never be 0
++		 * unxlate_dev_mem_ptr() will always free the bounce buffer.
++		 */
++		vaddr = (void *)(page_to_pfn(page) << PAGE_SHIFT);
++		unxlate_dev_mem_ptr(0, vaddr);
++	}
++}
++
++#endif /* __KERNEL__ */
++
++#endif /* _S390_CRASH_H */
+diff -urN linux-4.14-01/arch/s390/kernel/vdso32/Makefile linux-4.14-02/arch/s390/kernel/vdso32/Makefile
+--- linux-4.14-01/arch/s390/kernel/vdso32/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/s390/kernel/vdso32/Makefile	2018-01-29 14:51:49.723154213 +0000
+@@ -47,7 +47,8 @@
+ 
+ # actual build commands
+ quiet_cmd_vdso32ld = VDSO32L $@
+-      cmd_vdso32ld = $(CC) $(c_flags) -Wl,-T $^ -o $@
++      cmd_vdso32ld = $(CC) $(c_flags) -Wl,-T $^ -o $@ \
++		     $(if $(AFTER_LINK),; $(AFTER_LINK))
+ quiet_cmd_vdso32as = VDSO32A $@
+       cmd_vdso32as = $(CC) $(a_flags) -c -o $@ $<
+ 
+diff -urN linux-4.14-01/arch/s390/kernel/vdso64/Makefile linux-4.14-02/arch/s390/kernel/vdso64/Makefile
+--- linux-4.14-01/arch/s390/kernel/vdso64/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/s390/kernel/vdso64/Makefile	2018-01-29 14:51:49.723154213 +0000
+@@ -47,7 +47,8 @@
+ 
+ # actual build commands
+ quiet_cmd_vdso64ld = VDSO64L $@
+-      cmd_vdso64ld = $(CC) $(c_flags) -Wl,-T $^ -o $@
++      cmd_vdso64ld = $(CC) $(c_flags) -Wl,-T $^ -o $@ \
++		     $(if $(AFTER_LINK),; $(AFTER_LINK))
+ quiet_cmd_vdso64as = VDSO64A $@
+       cmd_vdso64as = $(CC) $(a_flags) -c -o $@ $<
+ 
+diff -urN linux-4.14-01/arch/s390/mm/maccess.c linux-4.14-02/arch/s390/mm/maccess.c
+--- linux-4.14-01/arch/s390/mm/maccess.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/s390/mm/maccess.c	2018-01-29 14:51:49.775154457 +0000
+@@ -202,6 +202,7 @@
+ 	put_online_cpus();
+ 	return bounce;
+ }
++EXPORT_SYMBOL_GPL(xlate_dev_mem_ptr);
+ 
+ /*
+  * Free converted buffer for /dev/mem access (if necessary)
+@@ -211,3 +212,4 @@
+ 	if ((void *) addr != buf)
+ 		free_page((unsigned long) buf);
+ }
++EXPORT_SYMBOL_GPL(unxlate_dev_mem_ptr);
+diff -urN linux-4.14-01/arch/x86/entry/vdso/Makefile linux-4.14-02/arch/x86/entry/vdso/Makefile
+--- linux-4.14-01/arch/x86/entry/vdso/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/entry/vdso/Makefile	2018-01-29 14:51:49.724154218 +0000
+@@ -168,8 +168,9 @@
+ quiet_cmd_vdso = VDSO    $@
+       cmd_vdso = $(CC) -nostdlib -o $@ \
+ 		       $(VDSO_LDFLAGS) $(VDSO_LDFLAGS_$(filter %.lds,$(^F))) \
+-		       -Wl,-T,$(filter %.lds,$^) $(filter %.o,$^) && \
+-		 sh $(srctree)/$(src)/checkundef.sh '$(NM)' '$@'
++		       -Wl,-T,$(filter %.lds,$^) $(filter %.o,$^) \
++		$(if $(AFTER_LINK),; $(AFTER_LINK)) && \
++		sh $(srctree)/$(src)/checkundef.sh '$(NM)' '$@'
+ 
+ VDSO_LDFLAGS = -fPIC -shared $(call cc-ldoption, -Wl$(comma)--hash-style=both) \
+ 	$(call cc-ldoption, -Wl$(comma)--build-id) -Wl,-Bsymbolic $(LTO_CFLAGS)
+diff -urN linux-4.14-01/arch/x86/include/asm/barrier.h linux-4.14-02/arch/x86/include/asm/barrier.h
+--- linux-4.14-01/arch/x86/include/asm/barrier.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/include/asm/barrier.h	2018-01-29 14:51:49.956155305 +0000
+@@ -24,6 +24,12 @@
+ #define wmb()	asm volatile("sfence" ::: "memory")
+ #endif
+ 
++/*
++ * CPUs without LFENCE don't really speculate much. Possibly fall back to IRET-to-self.
++ */
++#define __nospec_barrier() alternative("", "lfence", X86_FEATURE_LFENCE_RDTSC)
++#define nospec_barrier __nospec_barrier
++
+ #ifdef CONFIG_X86_PPRO_FENCE
+ #define dma_rmb()	rmb()
+ #else
+diff -urN linux-4.14-01/arch/x86/include/asm/crash-driver.h linux-4.14-02/arch/x86/include/asm/crash-driver.h
+--- linux-4.14-01/arch/x86/include/asm/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/arch/x86/include/asm/crash-driver.h	2018-01-29 14:51:49.775154457 +0000
+@@ -0,0 +1,6 @@
++#ifndef _X86_CRASH_H
++#define _X86_CRASH_H
++
++#include <asm-generic/crash-driver.h>
++
++#endif /* _X86_CRASH_H */
+diff -urN linux-4.14-01/arch/x86/include/asm/setup.h linux-4.14-02/arch/x86/include/asm/setup.h
+--- linux-4.14-01/arch/x86/include/asm/setup.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/include/asm/setup.h	2018-01-29 14:51:49.829154710 +0000
+@@ -9,6 +9,8 @@
+ #include <linux/linkage.h>
+ #include <asm/page_types.h>
+ 
++#define LOCKDOWN_LIFT_KEY 'x'
++
+ #ifdef __i386__
+ 
+ #include <linux/pfn.h>
+diff -urN linux-4.14-01/arch/x86/include/asm/uaccess.h linux-4.14-02/arch/x86/include/asm/uaccess.h
+--- linux-4.14-01/arch/x86/include/asm/uaccess.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/include/asm/uaccess.h	2018-01-29 14:51:49.957155310 +0000
+@@ -43,6 +43,8 @@
+ /*
+  * Test whether a block of memory is a valid user space address.
+  * Returns 0 if the range is valid, nonzero otherwise.
++ *
++ * We also disable speculation when a check fails.
+  */
+ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, unsigned long limit)
+ {
+@@ -53,14 +55,19 @@
+ 	 * important to subtract the size from the
+ 	 * limit, not add it to the address).
+ 	 */
+-	if (__builtin_constant_p(size))
+-		return unlikely(addr > limit - size);
++	if (__builtin_constant_p(size)) {
++		if (unlikely(addr > limit - size))
++			return true;
++		nospec_barrier();
++		return false;
++	}
+ 
+ 	/* Arbitrary sizes? Be careful about overflow */
+ 	addr += size;
+-	if (unlikely(addr < size))
++	if (unlikely(addr < size || addr > limit))
+ 		return true;
+-	return unlikely(addr > limit);
++	nospec_barrier();
++	return false;
+ }
+ 
+ #define __range_not_ok(addr, size, limit)				\
+@@ -94,6 +101,8 @@
+  * Note that, depending on architecture, this function probably just
+  * checks that the pointer is in the user space range - after calling
+  * this function, memory access functions may still return -EFAULT.
++ *
++ * Stops speculation automatically
+  */
+ #define access_ok(type, addr, size)					\
+ ({									\
+diff -urN linux-4.14-01/arch/x86/kernel/ioport.c linux-4.14-02/arch/x86/kernel/ioport.c
+--- linux-4.14-01/arch/x86/kernel/ioport.c	2018-01-29 14:51:28.481060207 +0000
++++ linux-4.14-02/arch/x86/kernel/ioport.c	2018-01-29 14:51:49.834154733 +0000
+@@ -31,7 +31,8 @@
+ 
+ 	if ((from + num <= from) || (from + num > IO_BITMAP_BITS))
+ 		return -EINVAL;
+-	if (turn_on && !capable(CAP_SYS_RAWIO))
++	if (turn_on && (!capable(CAP_SYS_RAWIO) ||
++			kernel_is_locked_down("ioperm")))
+ 		return -EPERM;
+ 
+ 	/*
+@@ -121,7 +122,8 @@
+ 		return -EINVAL;
+ 	/* Trying to gain more privileges? */
+ 	if (level > old) {
+-		if (!capable(CAP_SYS_RAWIO))
++		if (!capable(CAP_SYS_RAWIO) ||
++		    kernel_is_locked_down("iopl"))
+ 			return -EPERM;
+ 	}
+ 	regs->flags = (regs->flags & ~X86_EFLAGS_IOPL) |
+diff -urN linux-4.14-01/arch/x86/kernel/kexec-bzimage64.c linux-4.14-02/arch/x86/kernel/kexec-bzimage64.c
+--- linux-4.14-01/arch/x86/kernel/kexec-bzimage64.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/kernel/kexec-bzimage64.c	2018-01-29 14:51:49.833154729 +0000
+@@ -179,6 +179,7 @@
+ 	if (efi_enabled(EFI_OLD_MEMMAP))
+ 		return 0;
+ 
++	params->secure_boot = boot_params.secure_boot;
+ 	ei->efi_loader_signature = current_ei->efi_loader_signature;
+ 	ei->efi_systab = current_ei->efi_systab;
+ 	ei->efi_systab_hi = current_ei->efi_systab_hi;
+diff -urN linux-4.14-01/arch/x86/kernel/msr.c linux-4.14-02/arch/x86/kernel/msr.c
+--- linux-4.14-01/arch/x86/kernel/msr.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/kernel/msr.c	2018-01-29 14:51:49.834154733 +0000
+@@ -84,6 +84,11 @@
+ 	int err = 0;
+ 	ssize_t bytes = 0;
+ 
++	if (kernel_is_locked_down("Direct MSR access")) {
++		pr_info("Direct access to MSR %x\n", reg);
++		return -EPERM;
++	}
++
+ 	if (count % 8)
+ 		return -EINVAL;	/* Invalid chunk size */
+ 
+@@ -135,6 +140,11 @@
+ 			err = -EFAULT;
+ 			break;
+ 		}
++		if (kernel_is_locked_down("Direct MSR access")) {
++			pr_info("Direct access to MSR %x\n", regs[1]); /* Display %ecx */
++			err = -EPERM;
++			break;
++		}
+ 		err = wrmsr_safe_regs_on_cpu(cpu, regs);
+ 		if (err)
+ 			break;
+diff -urN linux-4.14-01/arch/x86/kernel/setup.c linux-4.14-02/arch/x86/kernel/setup.c
+--- linux-4.14-01/arch/x86/kernel/setup.c	2018-01-29 14:51:28.486060229 +0000
++++ linux-4.14-02/arch/x86/kernel/setup.c	2018-01-29 14:51:49.846154790 +0000
+@@ -64,6 +64,7 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/ctype.h>
+ #include <linux/uaccess.h>
++#include <linux/security.h>
+ 
+ #include <linux/percpu.h>
+ #include <linux/crash_dump.h>
+@@ -1031,6 +1032,9 @@
+ 	if (efi_enabled(EFI_BOOT))
+ 		efi_init();
+ 
++	efi_set_secure_boot(boot_params.secure_boot);
++	init_lockdown();
++
+ 	dmi_scan_machine();
+ 	dmi_memdev_walk();
+ 	dmi_set_dump_stack_arch_desc();
+@@ -1189,20 +1193,6 @@
+ 	/* Allocate bigger log buffer */
+ 	setup_log_buf(1);
+ 
+-	if (efi_enabled(EFI_BOOT)) {
+-		switch (boot_params.secure_boot) {
+-		case efi_secureboot_mode_disabled:
+-			pr_info("Secure boot disabled\n");
+-			break;
+-		case efi_secureboot_mode_enabled:
+-			pr_info("Secure boot enabled\n");
+-			break;
+-		default:
+-			pr_info("Secure boot could not be determined\n");
+-			break;
+-		}
+-	}
+-
+ 	reserve_initrd();
+ 
+ 	acpi_table_upgrade();
+diff -urN linux-4.14-01/arch/x86/mm/testmmiotrace.c linux-4.14-02/arch/x86/mm/testmmiotrace.c
+--- linux-4.14-01/arch/x86/mm/testmmiotrace.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/arch/x86/mm/testmmiotrace.c	2018-01-29 14:51:49.839154757 +0000
+@@ -115,6 +115,9 @@
+ {
+ 	unsigned long size = (read_far) ? (8 << 20) : (16 << 10);
+ 
++	if (kernel_is_locked_down("MMIO trace testing"))
++		return -EPERM;
++
+ 	if (mmio_address == 0) {
+ 		pr_err("you have to use the module argument mmio_address.\n");
+ 		pr_err("DO NOT LOAD THIS MODULE UNLESS YOU REALLY KNOW WHAT YOU ARE DOING!\n");
+diff -urN linux-4.14-01/certs/efi_parser.c linux-4.14-02/certs/efi_parser.c
+--- linux-4.14-01/certs/efi_parser.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/certs/efi_parser.c	2018-01-29 14:51:49.866154883 +0000
+@@ -0,0 +1,112 @@
++/* EFI signature/key/certificate list parser
++ *
++ * Copyright (C) 2012, 2016 Red Hat, Inc. All Rights Reserved.
++ * Written by David Howells (dhowells@redhat.com)
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public Licence
++ * as published by the Free Software Foundation; either version
++ * 2 of the Licence, or (at your option) any later version.
++ */
++
++#define pr_fmt(fmt) "EFI: "fmt
++#include <linux/module.h>
++#include <linux/printk.h>
++#include <linux/err.h>
++#include <linux/efi.h>
++
++/**
++ * parse_efi_signature_list - Parse an EFI signature list for certificates
++ * @source: The source of the key
++ * @data: The data blob to parse
++ * @size: The size of the data blob
++ * @get_handler_for_guid: Get the handler func for the sig type (or NULL)
++ *
++ * Parse an EFI signature list looking for elements of interest.  A list is
++ * made up of a series of sublists, where all the elements in a sublist are of
++ * the same type, but sublists can be of different types.
++ *
++ * For each sublist encountered, the @get_handler_for_guid function is called
++ * with the type specifier GUID and returns either a pointer to a function to
++ * handle elements of that type or NULL if the type is not of interest.
++ *
++ * If the sublist is of interest, each element is passed to the handler
++ * function in turn.
++ *
++ * Error EBADMSG is returned if the list doesn't parse correctly and 0 is
++ * returned if the list was parsed correctly.  No error can be returned from
++ * the @get_handler_for_guid function or the element handler function it
++ * returns.
++ */
++int __init parse_efi_signature_list(
++	const char *source,
++	const void *data, size_t size,
++	efi_element_handler_t (*get_handler_for_guid)(const efi_guid_t *))
++{
++	efi_element_handler_t handler;
++	unsigned offs = 0;
++
++	pr_devel("-->%s(,%zu)\n", __func__, size);
++
++	while (size > 0) {
++		const efi_signature_data_t *elem;
++		efi_signature_list_t list;
++		size_t lsize, esize, hsize, elsize;
++
++		if (size < sizeof(list))
++			return -EBADMSG;
++
++		memcpy(&list, data, sizeof(list));
++		pr_devel("LIST[%04x] guid=%pUl ls=%x hs=%x ss=%x\n",
++			 offs,
++			 list.signature_type.b, list.signature_list_size,
++			 list.signature_header_size, list.signature_size);
++
++		lsize = list.signature_list_size;
++		hsize = list.signature_header_size;
++		esize = list.signature_size;
++		elsize = lsize - sizeof(list) - hsize;
++
++		if (lsize > size) {
++			pr_devel("<--%s() = -EBADMSG [overrun @%x]\n",
++				 __func__, offs);
++			return -EBADMSG;
++		}
++
++		if (lsize < sizeof(list) ||
++		    lsize - sizeof(list) < hsize ||
++		    esize < sizeof(*elem) ||
++		    elsize < esize ||
++		    elsize % esize != 0) {
++			pr_devel("- bad size combo @%x\n", offs);
++			return -EBADMSG;
++		}
++
++		handler = get_handler_for_guid(&list.signature_type);
++		if (!handler) {
++			data += lsize;
++			size -= lsize;
++			offs += lsize;
++			continue;
++		}
++
++		data += sizeof(list) + hsize;
++		size -= sizeof(list) + hsize;
++		offs += sizeof(list) + hsize;
++
++		for (; elsize > 0; elsize -= esize) {
++			elem = data;
++
++			pr_devel("ELEM[%04x]\n", offs);
++			handler(source,
++				&elem->signature_data,
++				esize - sizeof(*elem));
++
++			data += esize;
++			size -= esize;
++			offs += esize;
++		}
++	}
++
++	return 0;
++}
+diff -urN linux-4.14-01/certs/internal.h linux-4.14-02/certs/internal.h
+--- linux-4.14-01/certs/internal.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/certs/internal.h	2018-01-29 14:51:49.852154818 +0000
+@@ -0,0 +1,18 @@
++/* Internal definitions
++ *
++ * Copyright (C) 2016 Red Hat, Inc. All Rights Reserved.
++ * Written by David Howells (dhowells@redhat.com)
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public Licence
++ * as published by the Free Software Foundation; either version
++ * 2 of the Licence, or (at your option) any later version.
++ */
++
++/*
++ * system_keyring.c
++ */
++#ifdef CONFIG_SECONDARY_TRUSTED_KEYRING
++extern void __init add_trusted_secondary_key(const char *source,
++					     const void *data, size_t len);
++#endif
+diff -urN linux-4.14-01/certs/Kconfig linux-4.14-02/certs/Kconfig
+--- linux-4.14-01/certs/Kconfig	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/certs/Kconfig	2018-01-29 14:51:49.873154916 +0000
+@@ -83,4 +83,28 @@
+ 	  wrapper to incorporate the list into the kernel.  Each <hash> should
+ 	  be a string of hex digits.
+ 
++config EFI_SIGNATURE_LIST_PARSER
++	bool "EFI signature list parser"
++	depends on EFI
++	select X509_CERTIFICATE_PARSER
++	help
++	  This option provides support for parsing EFI signature lists for
++	  X.509 certificates and turning them into keys.
++
++config LOAD_UEFI_KEYS
++	bool "Load certs and blacklist from UEFI db for module checking"
++	depends on SYSTEM_BLACKLIST_KEYRING
++	depends on SECONDARY_TRUSTED_KEYRING
++	depends on EFI
++	depends on EFI_SIGNATURE_LIST_PARSER
++	help
++	  If the kernel is booted in secure boot mode, this option will cause
++	  the kernel to load the certificates from the UEFI db and MokListRT
++	  into the secondary trusted keyring.  It will also load any X.509
++	  SHA256 hashes in the dbx list into the blacklist.
++
++	  The effect of this is that, if the kernel is booted in secure boot
++	  mode, modules signed with UEFI-stored keys will be permitted to be
++	  loaded and keys that match the blacklist will be rejected.
++
+ endmenu
+diff -urN linux-4.14-01/certs/load_uefi.c linux-4.14-02/certs/load_uefi.c
+--- linux-4.14-01/certs/load_uefi.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/certs/load_uefi.c	2018-01-29 14:51:49.899155038 +0000
+@@ -0,0 +1,201 @@
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/cred.h>
++#include <linux/err.h>
++#include <linux/efi.h>
++#include <linux/slab.h>
++#include <keys/asymmetric-type.h>
++#include <keys/system_keyring.h>
++#include "internal.h"
++
++static __initdata efi_guid_t efi_cert_x509_guid = EFI_CERT_X509_GUID;
++static __initdata efi_guid_t efi_cert_x509_sha256_guid = EFI_CERT_X509_SHA256_GUID;
++static __initdata efi_guid_t efi_cert_sha256_guid = EFI_CERT_SHA256_GUID;
++
++/*
++ * Look to see if a UEFI variable called MokIgnoreDB exists and return true if
++ * it does.
++ *
++ * This UEFI variable is set by the shim if a user tells the shim to not use
++ * the certs/hashes in the UEFI db variable for verification purposes.  If it
++ * is set, we should ignore the db variable also and the true return indicates
++ * this.
++ */
++static __init bool uefi_check_ignore_db(void)
++{
++	efi_status_t status;
++	unsigned int db = 0;
++	unsigned long size = sizeof(db);
++	efi_guid_t guid = EFI_SHIM_LOCK_GUID;
++
++	status = efi.get_variable(L"MokIgnoreDB", &guid, NULL, &size, &db);
++	return status == EFI_SUCCESS;
++}
++
++/*
++ * Get a certificate list blob from the named EFI variable.
++ */
++static __init int get_cert_list(efi_char16_t *name, efi_guid_t *guid,
++				unsigned long *size, void **cert_list)
++{
++	efi_status_t status;
++	unsigned long lsize = 4;
++	unsigned long tmpdb[4];
++	void *db;
++
++	status = efi.get_variable(name, guid, NULL, &lsize, &tmpdb);
++	if (status == EFI_NOT_FOUND) {
++		*size = 0;
++		*cert_list = NULL;
++		return 0;
++	}
++
++	if (status != EFI_BUFFER_TOO_SMALL) {
++		pr_err("Couldn't get size: %s (0x%lx)\n",
++		       efi_status_to_str(status), status);
++		return efi_status_to_err(status);
++	}
++
++	db = kmalloc(lsize, GFP_KERNEL);
++	if (!db) {
++		pr_err("Couldn't allocate memory for uefi cert list\n");
++		return -ENOMEM;
++	}
++
++	status = efi.get_variable(name, guid, NULL, &lsize, db);
++	if (status != EFI_SUCCESS) {
++		kfree(db);
++		pr_err("Error reading db var: %s (0x%lx)\n",
++		       efi_status_to_str(status), status);
++		return efi_status_to_err(status);
++	}
++
++	*size = lsize;
++	*cert_list = db;
++	return 0;
++}
++
++/*
++ * Blacklist an X509 TBS hash.
++ */
++static __init void uefi_blacklist_x509_tbs(const char *source,
++					   const void *data, size_t len)
++{
++	char *hash, *p;
++
++	hash = kmalloc(4 + len * 2 + 1, GFP_KERNEL);
++	if (!hash)
++		return;
++	p = memcpy(hash, "tbs:", 4);
++	p += 4;
++	bin2hex(p, data, len);
++	p += len * 2;
++	*p = 0;
++
++	mark_hash_blacklisted(hash);
++	kfree(hash);
++}
++
++/*
++ * Blacklist the hash of an executable.
++ */
++static __init void uefi_blacklist_binary(const char *source,
++					 const void *data, size_t len)
++{
++	char *hash, *p;
++
++	hash = kmalloc(4 + len * 2 + 1, GFP_KERNEL);
++	if (!hash)
++		return;
++	p = memcpy(hash, "bin:", 4);
++	p += 4;
++	bin2hex(p, data, len);
++	p += len * 2;
++	*p = 0;
++
++	mark_hash_blacklisted(hash);
++	kfree(hash);
++}
++
++/*
++ * Return the appropriate handler for particular signature list types found in
++ * the UEFI db and MokListRT tables.
++ */
++static __init efi_element_handler_t get_handler_for_db(const efi_guid_t *sig_type)
++{
++	if (efi_guidcmp(*sig_type, efi_cert_x509_guid) == 0)
++		return add_trusted_secondary_key;
++	return 0;
++}
++
++/*
++ * Return the appropriate handler for particular signature list types found in
++ * the UEFI dbx and MokListXRT tables.
++ */
++static __init efi_element_handler_t get_handler_for_dbx(const efi_guid_t *sig_type)
++{
++	if (efi_guidcmp(*sig_type, efi_cert_x509_sha256_guid) == 0)
++		return uefi_blacklist_x509_tbs;
++	if (efi_guidcmp(*sig_type, efi_cert_sha256_guid) == 0)
++		return uefi_blacklist_binary;
++	return 0;
++}
++
++/*
++ * Load the certs contained in the UEFI databases into the secondary trusted
++ * keyring and the UEFI blacklisted X.509 cert SHA256 hashes into the blacklist
++ * keyring.
++ */
++static int __init load_uefi_certs(void)
++{
++	efi_guid_t secure_var = EFI_IMAGE_SECURITY_DATABASE_GUID;
++	efi_guid_t mok_var = EFI_SHIM_LOCK_GUID;
++	void *db = NULL, *dbx = NULL, *mok = NULL;
++	unsigned long dbsize = 0, dbxsize = 0, moksize = 0;
++	int rc = 0;
++
++	if (!efi.get_variable)
++		return false;
++
++	/* Get db, MokListRT, and dbx.  They might not exist, so it isn't
++	 * an error if we can't get them.
++	 */
++	if (!uefi_check_ignore_db()) {
++		rc = get_cert_list(L"db", &secure_var, &dbsize, &db);
++		if (rc < 0) {
++			pr_err("MODSIGN: Couldn't get UEFI db list\n");
++		} else if (dbsize != 0) {
++			rc = parse_efi_signature_list("UEFI:db",
++						      db, dbsize, get_handler_for_db);
++			if (rc)
++				pr_err("Couldn't parse db signatures: %d\n", rc);
++			kfree(db);
++		}
++	}
++
++	rc = get_cert_list(L"MokListRT", &mok_var, &moksize, &mok);
++	if (rc < 0) {
++		pr_info("MODSIGN: Couldn't get UEFI MokListRT\n");
++	} else if (moksize != 0) {
++		rc = parse_efi_signature_list("UEFI:MokListRT",
++					      mok, moksize, get_handler_for_db);
++		if (rc)
++			pr_err("Couldn't parse MokListRT signatures: %d\n", rc);
++		kfree(mok);
++	}
++
++	rc = get_cert_list(L"dbx", &secure_var, &dbxsize, &dbx);
++	if (rc < 0) {
++		pr_info("MODSIGN: Couldn't get UEFI dbx list\n");
++	} else if (dbxsize != 0) {
++		rc = parse_efi_signature_list("UEFI:dbx",
++					      dbx, dbxsize,
++					      get_handler_for_dbx);
++		if (rc)
++			pr_err("Couldn't parse dbx signatures: %d\n", rc);
++		kfree(dbx);
++	}
++
++	return rc;
++}
++late_initcall(load_uefi_certs);
+diff -urN linux-4.14-01/certs/Makefile linux-4.14-02/certs/Makefile
+--- linux-4.14-01/certs/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/certs/Makefile	2018-01-29 14:51:49.873154916 +0000
+@@ -10,6 +10,11 @@
+ else
+ obj-$(CONFIG_SYSTEM_BLACKLIST_KEYRING) += blacklist_nohashes.o
+ endif
++obj-$(CONFIG_EFI_SIGNATURE_LIST_PARSER) += efi_parser.o
++
++obj-$(CONFIG_LOAD_UEFI_KEYS) += load_uefi.o
++$(obj)/load_uefi.o: KBUILD_CFLAGS += -fshort-wchar
++
+ 
+ ifeq ($(CONFIG_SYSTEM_TRUSTED_KEYRING),y)
+ 
+diff -urN linux-4.14-01/certs/system_keyring.c linux-4.14-02/certs/system_keyring.c
+--- linux-4.14-01/certs/system_keyring.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/certs/system_keyring.c	2018-01-29 14:51:49.853154822 +0000
+@@ -18,6 +18,7 @@
+ #include <keys/asymmetric-type.h>
+ #include <keys/system_keyring.h>
+ #include <crypto/pkcs7.h>
++#include "internal.h"
+ 
+ static struct key *builtin_trusted_keys;
+ #ifdef CONFIG_SECONDARY_TRUSTED_KEYRING
+@@ -265,3 +266,35 @@
+ EXPORT_SYMBOL_GPL(verify_pkcs7_signature);
+ 
+ #endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
++
++#ifdef CONFIG_SECONDARY_TRUSTED_KEYRING
++/**
++ * add_trusted_secondary_key - Add to secondary keyring with no validation
++ * @source: Source of key
++ * @data: The blob holding the key
++ * @len: The length of the data blob
++ *
++ * Add a key to the secondary keyring without checking its trust chain.  This
++ * is available only during kernel initialisation.
++ */
++void __init add_trusted_secondary_key(const char *source,
++				      const void *data, size_t len)
++{
++	key_ref_t key;
++
++	key = key_create_or_update(make_key_ref(secondary_trusted_keys, 1),
++				   "asymmetric",
++				   NULL, data, len,
++				   (KEY_POS_ALL & ~KEY_POS_SETATTR) |
++				   KEY_USR_VIEW,
++				   KEY_ALLOC_NOT_IN_QUOTA |
++				   KEY_ALLOC_BYPASS_RESTRICTION);
++
++	if (IS_ERR(key))
++		pr_err("Problem loading %s X.509 certificate (%ld)\n",
++		       source, PTR_ERR(key));
++	else
++		pr_notice("Loaded %s cert '%s' linked to secondary sys keyring\n",
++			  source, key_ref_to_ptr(key)->description);
++}
++#endif /* CONFIG_SECONDARY_TRUSTED_KEYRING */
+diff -urN linux-4.14-01/Documentation/speculation.txt linux-4.14-02/Documentation/speculation.txt
+--- linux-4.14-01/Documentation/speculation.txt	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/Documentation/speculation.txt	2018-01-29 14:51:49.955155301 +0000
+@@ -0,0 +1,166 @@
++This document explains potential effects of speculation, and how undesirable
++effects can be mitigated portably using common APIs.
++
++===========
++Speculation
++===========
++
++To improve performance and minimize average latencies, many contemporary CPUs
++employ speculative execution techniques such as branch prediction, performing
++work which may be discarded at a later stage.
++
++Typically speculative execution cannot be observed from architectural state,
++such as the contents of registers. However, in some cases it is possible to
++observe its impact on microarchitectural state, such as the presence or
++absence of data in caches. Such state may form side-channels which can be
++observed to extract secret information.
++
++For example, in the presence of branch prediction, it is possible for bounds
++checks to be ignored by code which is speculatively executed. Consider the
++following code:
++
++	int load_array(int *array, unsigned int idx) {
++		if (idx >= MAX_ARRAY_ELEMS)
++			return 0;
++		else
++			return array[idx];
++	}
++
++Which, on arm64, may be compiled to an assembly sequence such as:
++
++	CMP	<idx>, #MAX_ARRAY_ELEMS
++	B.LT	less
++	MOV	<returnval>, #0
++	RET
++  less:
++	LDR	<returnval>, [<array>, <idx>]
++	RET
++
++It is possible that a CPU mis-predicts the conditional branch, and
++speculatively loads array[idx], even if idx >= MAX_ARRAY_ELEMS. This value
++will subsequently be discarded, but the speculated load may affect
++microarchitectural state which can be subsequently measured.
++
++More complex sequences involving multiple dependent memory accesses may result
++in sensitive information being leaked. Consider the following code, building on
++the prior example:
++
++	int load_dependent_arrays(int *arr1, int *arr2, int idx) {
++		int val1, val2,
++
++		val1 = load_array(arr1, idx);
++		val2 = load_array(arr2, val1);
++
++		return val2;
++	}
++
++Under speculation, the first call to load_array() may return the value of an
++out-of-bounds address, while the second call will influence microarchitectural
++state dependent on this value. This may provide an arbitrary read primitive.
++
++====================================
++Mitigating speculation side-channels
++====================================
++
++The kernel provides a generic API to ensure that bounds checks are respected
++even under speculation. Architectures which are affected by speculation-based
++side-channels are expected to implement these primitives.
++
++The following helpers found in <asm/barrier.h> can be used to prevent
++information from being leaked via side-channels.
++
++* nospec_ptr(ptr, lo, hi)
++
++  Returns a sanitized pointer that is bounded by the [lo, hi) interval. When
++  ptr < lo, or ptr >= hi, NULL is returned. Prevents an out-of-bounds pointer
++  being propagated to code which is speculatively executed.
++
++  This is expected to be used by code which computes pointers to data
++  structures, where part of the address (such as an array index) may be
++  user-controlled.
++
++  This can be used to protect the earlier load_array() example:
++
++  int load_array(int *array, unsigned int idx)
++  {
++	int *elem;
++
++	if ((elem = nospec_ptr(array + idx, array, array + MAX_ARRAY_ELEMS)))
++		return *elem;
++	else
++		return 0;
++  }
++
++  This can also be used in situations where multiple fields on a structure are
++  accessed:
++
++	struct foo array[SIZE];
++	int a, b;
++
++	void do_thing(int idx)
++	{
++		struct foo *elem;
++
++		if ((elem = nospec_ptr(array + idx, array, array + SIZE)) {
++			a = elem->field_a;
++			b = elem->field_b;
++		}
++	}
++
++  It is imperative that the returned pointer is used. Pointers which are
++  generated separately are subject to a number of potential CPU and compiler
++  optimizations, and may still be used speculatively. For example, this means
++  that the following sequence is unsafe:
++
++	struct foo array[SIZE];
++	int a, b;
++
++	void do_thing(int idx)
++	{
++		if (nospec_ptr(array + idx, array, array + SIZE) != NULL) {
++			// unsafe as wrong pointer is used
++			a = array[idx].field_a;
++			b = array[idx].field_b;
++		}
++	}
++
++  Similarly, it is unsafe to compare the returned pointer with other pointers,
++  as this may permit the compiler to substitute one pointer with another,
++  permitting speculation. For example, the following sequence is unsafe:
++
++	struct foo array[SIZE];
++	int a, b;
++
++	void do_thing(int idx)
++	{
++		struct foo *elem = nospec_ptr(array + idx, array, array + size);
++
++		// unsafe due to pointer substitution
++		if (elem == &array[idx]) {
++			a = elem->field_a;
++			b = elem->field_b;
++		}
++	}
++
++* nospec_array_ptr(arr, idx, sz)
++
++  Returns a sanitized pointer to arr[idx] only if idx falls in the [0, sz)
++  interval. When idx < 0 or idx > sz, NULL is returned. Prevents an
++  out-of-bounds pointer being propagated to code which is speculatively
++  executed.
++
++  This is a convenience function which wraps nospec_ptr(), and has the same
++  caveats w.r.t. the use of the returned pointer.
++
++  For example, this may be used as follows:
++
++  int load_array(int *array, unsigned int idx)
++  {
++	int *elem;
++
++	if ((elem = nospec_array_ptr(array, idx, MAX_ARRAY_ELEMS)))
++		return *elem;
++	else
++		return 0;
++  }
++
+diff -urN linux-4.14-01/drivers/acpi/apei/einj.c linux-4.14-02/drivers/acpi/apei/einj.c
+--- linux-4.14-01/drivers/acpi/apei/einj.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/acpi/apei/einj.c	2018-01-29 14:51:49.837154747 +0000
+@@ -518,6 +518,9 @@
+ 	int rc;
+ 	u64 base_addr, size;
+ 
++	if (kernel_is_locked_down("ACPI error injection"))
++		return -EPERM;
++
+ 	/* If user manually set "flags", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+diff -urN linux-4.14-01/drivers/acpi/custom_method.c linux-4.14-02/drivers/acpi/custom_method.c
+--- linux-4.14-01/drivers/acpi/custom_method.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/acpi/custom_method.c	2018-01-29 14:51:49.835154738 +0000
+@@ -29,6 +29,9 @@
+ 	struct acpi_table_header table;
+ 	acpi_status status;
+ 
++	if (kernel_is_locked_down("ACPI custom methods"))
++		return -EPERM;
++
+ 	if (!(*ppos)) {
+ 		/* parse the table header to get the table length */
+ 		if (count <= sizeof(struct acpi_table_header))
+diff -urN linux-4.14-01/drivers/acpi/osl.c linux-4.14-02/drivers/acpi/osl.c
+--- linux-4.14-01/drivers/acpi/osl.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/acpi/osl.c	2018-01-29 14:51:49.836154743 +0000
+@@ -192,7 +192,7 @@
+ 	acpi_physical_address pa = 0;
+ 
+ #ifdef CONFIG_KEXEC
+-	if (acpi_rsdp)
++	if (acpi_rsdp && !kernel_is_locked_down("ACPI RSDP specification"))
+ 		return acpi_rsdp;
+ #endif
+ 
+diff -urN linux-4.14-01/drivers/acpi/tables.c linux-4.14-02/drivers/acpi/tables.c
+--- linux-4.14-01/drivers/acpi/tables.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/acpi/tables.c	2018-01-29 14:51:49.836154743 +0000
+@@ -526,6 +526,11 @@
+ 	if (table_nr == 0)
+ 		return;
+ 
++	if (kernel_is_locked_down("ACPI table override")) {
++		pr_notice("kernel is locked down, ignoring table override\n");
++		return;
++	}
++
+ 	acpi_tables_addr =
+ 		memblock_find_in_range(0, ACPI_TABLE_UPGRADE_MAX_PHYS,
+ 				       all_tables_size, PAGE_SIZE);
+diff -urN linux-4.14-01/drivers/block/floppy.c linux-4.14-02/drivers/block/floppy.c
+--- linux-4.14-01/drivers/block/floppy.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/block/floppy.c	2018-01-29 14:51:49.749154335 +0000
+@@ -4963,8 +4963,7 @@
+ 	{"PNP0700", 0},
+ 	{}
+ };
+-
+-MODULE_DEVICE_TABLE(pnp, floppy_pnpids);
++/* MODULE_DEVICE_TABLE(pnp, floppy_pnpids); */
+ 
+ #else
+ 
+diff -urN linux-4.14-01/drivers/block/loop.c linux-4.14-02/drivers/block/loop.c
+--- linux-4.14-01/drivers/block/loop.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/block/loop.c	2018-01-29 14:51:49.948155268 +0000
+@@ -1576,9 +1576,8 @@
+ 	return err;
+ }
+ 
+-static void lo_release(struct gendisk *disk, fmode_t mode)
++static void __lo_release(struct loop_device *lo)
+ {
+-	struct loop_device *lo = disk->private_data;
+ 	int err;
+ 
+ 	if (atomic_dec_return(&lo->lo_refcnt))
+@@ -1605,6 +1604,13 @@
+ 	mutex_unlock(&lo->lo_ctl_mutex);
+ }
+ 
++static void lo_release(struct gendisk *disk, fmode_t mode)
++{
++	mutex_lock(&loop_index_mutex);
++	__lo_release(disk->private_data);
++	mutex_unlock(&loop_index_mutex);
++}
++
+ static const struct block_device_operations lo_fops = {
+ 	.owner =	THIS_MODULE,
+ 	.open =		lo_open,
+diff -urN linux-4.14-01/drivers/char/crash.c linux-4.14-02/drivers/char/crash.c
+--- linux-4.14-01/drivers/char/crash.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/drivers/char/crash.c	2018-01-29 14:51:49.776154461 +0000
+@@ -0,0 +1,166 @@
++/*
++ *  linux/drivers/char/crash.c
++ *
++ *  Copyright (C) 2004  Dave Anderson <anderson@redhat.com>
++ *  Copyright (C) 2004  Red Hat, Inc.
++ */
++
++/******************************************************************************
++ *
++ *   This program is free software; you can redistribute it and/or modify
++ *   it under the terms of the GNU General Public License as published by
++ *   the Free Software Foundation; either version 2, or (at your option)
++ *   any later version.
++ *
++ *   This program is distributed in the hope that it will be useful,
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *   GNU General Public License for more details.
++ *
++ *   You should have received a copy of the GNU General Public License
++ *   along with this program; if not, write to the Free Software
++ *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ *
++ *****************************************************************************/
++
++#include <linux/module.h>
++#include <linux/types.h>
++#include <linux/miscdevice.h>
++#include <linux/init.h>
++#include <asm/io.h>
++#include <asm/uaccess.h>
++#include <asm/types.h>
++#include <asm/crash-driver.h>
++
++#define CRASH_VERSION   "1.3"
++
++/*
++ *  These are the file operation functions that allow crash utility
++ *  access to physical memory.
++ */
++
++static loff_t
++crash_llseek(struct file * file, loff_t offset, int orig)
++{
++	switch (orig) {
++	case 0:
++		file->f_pos = offset;
++		return file->f_pos;
++	case 1:
++		file->f_pos += offset;
++		return file->f_pos;
++	default:
++		return -EINVAL;
++	}
++}
++
++/*
++ *  Determine the page address for an address offset value,
++ *  get a virtual address for it, and copy it out.
++ *  Accesses must fit within a page.
++ */
++static ssize_t
++crash_read(struct file *file, char *buf, size_t count, loff_t *poff)
++{
++	void *vaddr;
++	struct page *page;
++	u64 offset;
++	ssize_t read;
++	char *buffer = file->private_data;
++
++	offset = *poff;
++	if (offset >> PAGE_SHIFT != (offset+count-1) >> PAGE_SHIFT)
++		return -EINVAL;
++
++	vaddr = map_virtual(offset, &page);
++	if (!vaddr)
++		return -EFAULT;
++	/*
++	 * Use bounce buffer to bypass the CONFIG_HARDENED_USERCOPY
++	 * kernel text restriction.
++	*/
++	memcpy(buffer, (char *)vaddr, count);
++	if (copy_to_user(buf, buffer, count)) {
++		unmap_virtual(page);
++		return -EFAULT;
++	}
++	unmap_virtual(page);
++
++	read = count;
++	*poff += read;
++	return read;
++}
++
++static int
++crash_open(struct inode * inode, struct file * filp)
++{
++	if (!capable(CAP_SYS_RAWIO))
++		return -EPERM;
++
++	filp->private_data = (void *)__get_free_page(GFP_KERNEL);
++	if (!filp->private_data)
++		return -ENOMEM;
++
++	return 0;
++}
++
++static int
++crash_release(struct inode *inode, struct file *filp)
++{
++	free_pages((unsigned long)filp->private_data, 0);
++	return 0;
++}
++
++static long
++crash_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++#ifdef DEV_CRASH_ARCH_DATA
++	return crash_arch_ioctl(file, cmd, arg);
++#else
++	return -EINVAL;
++#endif
++}
++
++static struct file_operations crash_fops = {
++	.owner = THIS_MODULE,
++	.llseek = crash_llseek,
++	.read = crash_read,
++	.unlocked_ioctl = crash_ioctl,
++	.open = crash_open,
++	.release = crash_release,
++};
++
++static struct miscdevice crash_dev = {
++	MISC_DYNAMIC_MINOR,
++	"crash",
++	&crash_fops
++};
++
++static int __init
++crash_init(void)
++{
++	int ret;
++
++	ret = misc_register(&crash_dev);
++	if (ret) {
++		printk(KERN_ERR
++		    "crash memory driver: cannot misc_register (MISC_DYNAMIC_MINOR)\n");
++		goto out;
++	}
++
++	ret = 0;
++	printk(KERN_INFO "crash memory driver: version %s\n", CRASH_VERSION);
++out:
++	return ret;
++}
++
++static void __exit
++crash_cleanup_module(void)
++{
++	misc_deregister(&crash_dev);
++}
++
++module_init(crash_init);
++module_exit(crash_cleanup_module);
++
++MODULE_LICENSE("GPL");
+diff -urN linux-4.14-01/drivers/char/Kconfig linux-4.14-02/drivers/char/Kconfig
+--- linux-4.14-01/drivers/char/Kconfig	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/char/Kconfig	2018-01-29 14:51:49.776154461 +0000
+@@ -5,6 +5,10 @@
+ 
+ menu "Character devices"
+ 
++config CRASH
++	tristate "Crash Utility memory driver"
++	depends on X86_32 || X86_64 || ARM || ARM64 || PPC64 || S390
++
+ source "drivers/tty/Kconfig"
+ 
+ config DEVMEM
+diff -urN linux-4.14-01/drivers/char/Makefile linux-4.14-02/drivers/char/Makefile
+--- linux-4.14-01/drivers/char/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/char/Makefile	2018-01-29 14:51:49.775154457 +0000
+@@ -60,3 +60,5 @@
+ obj-$(CONFIG_TILE_SROM)		+= tile-srom.o
+ obj-$(CONFIG_XILLYBUS)		+= xillybus/
+ obj-$(CONFIG_POWERNV_OP_PANEL)	+= powernv-op-panel.o
++
++obj-$(CONFIG_CRASH)            += crash.o
+diff -urN linux-4.14-01/drivers/char/mem.c linux-4.14-02/drivers/char/mem.c
+--- linux-4.14-01/drivers/char/mem.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/char/mem.c	2018-01-29 14:51:49.832154724 +0000
+@@ -763,6 +763,8 @@
+ 
+ static int open_port(struct inode *inode, struct file *filp)
+ {
++	if (kernel_is_locked_down("/dev/mem,kmem,port"))
++		return -EPERM;
+ 	return capable(CAP_SYS_RAWIO) ? 0 : -EPERM;
+ }
+ 
+diff -urN linux-4.14-01/drivers/dma-buf/reservation.c linux-4.14-02/drivers/dma-buf/reservation.c
+--- linux-4.14-01/drivers/dma-buf/reservation.c	2018-01-29 14:51:28.715061240 +0000
++++ linux-4.14-02/drivers/dma-buf/reservation.c	2018-01-29 14:51:50.069155835 +0000
+@@ -455,13 +455,15 @@
+ 					 unsigned long timeout)
+ {
+ 	struct dma_fence *fence;
+-	unsigned seq, shared_count, i = 0;
++	unsigned seq, shared_count;
+ 	long ret = timeout ? timeout : 1;
++	int i;
+ 
+ retry:
+ 	shared_count = 0;
+ 	seq = read_seqcount_begin(&obj->seq);
+ 	rcu_read_lock();
++	i = -1;
+ 
+ 	fence = rcu_dereference(obj->fence_excl);
+ 	if (fence && !test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+@@ -477,14 +479,14 @@
+ 		fence = NULL;
+ 	}
+ 
+-	if (!fence && wait_all) {
++	if (wait_all) {
+ 		struct reservation_object_list *fobj =
+ 						rcu_dereference(obj->fence);
+ 
+ 		if (fobj)
+ 			shared_count = fobj->shared_count;
+ 
+-		for (i = 0; i < shared_count; ++i) {
++		for (i = 0; !fence && i < shared_count; ++i) {
+ 			struct dma_fence *lfence = rcu_dereference(fobj->shared[i]);
+ 
+ 			if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT,
+diff -urN linux-4.14-01/drivers/firmware/efi/efi.c linux-4.14-02/drivers/firmware/efi/efi.c
+--- linux-4.14-01/drivers/firmware/efi/efi.c	2018-01-29 14:51:28.717061249 +0000
++++ linux-4.14-02/drivers/firmware/efi/efi.c	2018-01-29 14:51:49.893155010 +0000
+@@ -31,6 +31,7 @@
+ #include <linux/acpi.h>
+ #include <linux/ucs2_string.h>
+ #include <linux/memblock.h>
++#include <linux/bsearch.h>
+ 
+ #include <asm/early_ioremap.h>
+ 
+@@ -863,40 +864,101 @@
+ }
+ #endif
+ 
++struct efi_error_code {
++	efi_status_t status;
++	int errno;
++	const char *description;
++};
++
++static const struct efi_error_code efi_error_codes[] = {
++	{ EFI_SUCCESS, 0, "Success"},
++#if 0
++	{ EFI_LOAD_ERROR, -EPICK_AN_ERRNO, "Load Error"},
++#endif
++	{ EFI_INVALID_PARAMETER, -EINVAL, "Invalid Parameter"},
++	{ EFI_UNSUPPORTED, -ENOSYS, "Unsupported"},
++	{ EFI_BAD_BUFFER_SIZE, -ENOSPC, "Bad Buffer Size"},
++	{ EFI_BUFFER_TOO_SMALL, -ENOSPC, "Buffer Too Small"},
++	{ EFI_NOT_READY, -EAGAIN, "Not Ready"},
++	{ EFI_DEVICE_ERROR, -EIO, "Device Error"},
++	{ EFI_WRITE_PROTECTED, -EROFS, "Write Protected"},
++	{ EFI_OUT_OF_RESOURCES, -ENOMEM, "Out of Resources"},
++#if 0
++	{ EFI_VOLUME_CORRUPTED, -EPICK_AN_ERRNO, "Volume Corrupt"},
++	{ EFI_VOLUME_FULL, -EPICK_AN_ERRNO, "Volume Full"},
++	{ EFI_NO_MEDIA, -EPICK_AN_ERRNO, "No Media"},
++	{ EFI_MEDIA_CHANGED, -EPICK_AN_ERRNO, "Media changed"},
++#endif
++	{ EFI_NOT_FOUND, -ENOENT, "Not Found"},
++#if 0
++	{ EFI_ACCESS_DENIED, -EPICK_AN_ERRNO, "Access Denied"},
++	{ EFI_NO_RESPONSE, -EPICK_AN_ERRNO, "No Response"},
++	{ EFI_NO_MAPPING, -EPICK_AN_ERRNO, "No mapping"},
++	{ EFI_TIMEOUT, -EPICK_AN_ERRNO, "Time out"},
++	{ EFI_NOT_STARTED, -EPICK_AN_ERRNO, "Not started"},
++	{ EFI_ALREADY_STARTED, -EPICK_AN_ERRNO, "Already started"},
++#endif
++	{ EFI_ABORTED, -EINTR, "Aborted"},
++#if 0
++	{ EFI_ICMP_ERROR, -EPICK_AN_ERRNO, "ICMP Error"},
++	{ EFI_TFTP_ERROR, -EPICK_AN_ERRNO, "TFTP Error"},
++	{ EFI_PROTOCOL_ERROR, -EPICK_AN_ERRNO, "Protocol Error"},
++	{ EFI_INCOMPATIBLE_VERSION, -EPICK_AN_ERRNO, "Incompatible Version"},
++#endif
++	{ EFI_SECURITY_VIOLATION, -EACCES, "Security Policy Violation"},
++#if 0
++	{ EFI_CRC_ERROR, -EPICK_AN_ERRNO, "CRC Error"},
++	{ EFI_END_OF_MEDIA, -EPICK_AN_ERRNO, "End of Media"},
++	{ EFI_END_OF_FILE, -EPICK_AN_ERRNO, "End of File"},
++	{ EFI_INVALID_LANGUAGE, -EPICK_AN_ERRNO, "Invalid Languages"},
++	{ EFI_COMPROMISED_DATA, -EPICK_AN_ERRNO, "Compromised Data"},
++
++	// warnings
++	{ EFI_WARN_UNKOWN_GLYPH, -EPICK_AN_ERRNO, "Warning Unknown Glyph"},
++	{ EFI_WARN_DELETE_FAILURE, -EPICK_AN_ERRNO, "Warning Delete Failure"},
++	{ EFI_WARN_WRITE_FAILURE, -EPICK_AN_ERRNO, "Warning Write Failure"},
++	{ EFI_WARN_BUFFER_TOO_SMALL, -EPICK_AN_ERRNO, "Warning Buffer Too Small"},
++#endif
++};
++
++static int
++efi_status_cmp_bsearch(const void *key, const void *item)
++{
++	u64 status = (u64)(uintptr_t)key;
++	struct efi_error_code *code = (struct efi_error_code *)item;
++
++	if (status < code->status)
++		return -1;
++	if (status > code->status)
++		return 1;
++	return 0;
++}
++
+ int efi_status_to_err(efi_status_t status)
+ {
+-	int err;
++	struct efi_error_code *found;
++	size_t num = sizeof(efi_error_codes) / sizeof(struct efi_error_code);
+ 
+-	switch (status) {
+-	case EFI_SUCCESS:
+-		err = 0;
+-		break;
+-	case EFI_INVALID_PARAMETER:
+-		err = -EINVAL;
+-		break;
+-	case EFI_OUT_OF_RESOURCES:
+-		err = -ENOSPC;
+-		break;
+-	case EFI_DEVICE_ERROR:
+-		err = -EIO;
+-		break;
+-	case EFI_WRITE_PROTECTED:
+-		err = -EROFS;
+-		break;
+-	case EFI_SECURITY_VIOLATION:
+-		err = -EACCES;
+-		break;
+-	case EFI_NOT_FOUND:
+-		err = -ENOENT;
+-		break;
+-	case EFI_ABORTED:
+-		err = -EINTR;
+-		break;
+-	default:
+-		err = -EINVAL;
+-	}
++	found = bsearch((void *)(uintptr_t)status, efi_error_codes,
++			sizeof(struct efi_error_code), num,
++			efi_status_cmp_bsearch);
++	if (!found)
++		return -EINVAL;
++	return found->errno;
++}
++
++const char *
++efi_status_to_str(efi_status_t status)
++{
++	struct efi_error_code *found;
++	size_t num = sizeof(efi_error_codes) / sizeof(struct efi_error_code);
+ 
+-	return err;
++	found = bsearch((void *)(uintptr_t)status, efi_error_codes,
++			sizeof(struct efi_error_code), num,
++			efi_status_cmp_bsearch);
++	if (!found)
++		return "Unknown error code";
++	return found->description;
+ }
+ 
+ bool efi_is_table_address(unsigned long phys_addr)
+diff -urN linux-4.14-01/drivers/firmware/efi/Makefile linux-4.14-02/drivers/firmware/efi/Makefile
+--- linux-4.14-01/drivers/firmware/efi/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/firmware/efi/Makefile	2018-01-29 14:51:49.840154761 +0000
+@@ -24,6 +24,7 @@
+ obj-$(CONFIG_EFI_BOOTLOADER_CONTROL)	+= efibc.o
+ obj-$(CONFIG_EFI_TEST)			+= test/
+ obj-$(CONFIG_EFI_DEV_PATH_PARSER)	+= dev-path-parser.o
++obj-$(CONFIG_EFI)			+= secureboot.o
+ obj-$(CONFIG_APPLE_PROPERTIES)		+= apple-properties.o
+ 
+ arm-obj-$(CONFIG_EFI)			:= arm-init.o arm-runtime.o
+diff -urN linux-4.14-01/drivers/firmware/efi/secureboot.c linux-4.14-02/drivers/firmware/efi/secureboot.c
+--- linux-4.14-01/drivers/firmware/efi/secureboot.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/drivers/firmware/efi/secureboot.c	2018-01-29 14:51:49.840154761 +0000
+@@ -0,0 +1,38 @@
++/* Core kernel secure boot support.
++ *
++ * Copyright (C) 2017 Red Hat, Inc. All Rights Reserved.
++ * Written by David Howells (dhowells@redhat.com)
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public Licence
++ * as published by the Free Software Foundation; either version
++ * 2 of the Licence, or (at your option) any later version.
++ */
++
++#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
++
++#include <linux/efi.h>
++#include <linux/kernel.h>
++#include <linux/printk.h>
++
++/*
++ * Decide what to do when UEFI secure boot mode is enabled.
++ */
++void __init efi_set_secure_boot(enum efi_secureboot_mode mode)
++{
++	if (efi_enabled(EFI_BOOT)) {
++		switch (mode) {
++		case efi_secureboot_mode_disabled:
++			pr_info("Secure boot disabled\n");
++			break;
++		case efi_secureboot_mode_enabled:
++			set_bit(EFI_SECURE_BOOT, &efi.flags);
++			pr_info("Secure boot enabled\n");
++			break;
++		default:
++			pr_warning("Secure boot could not be determined (mode %u)\n",
++				   mode);
++			break;
++		}
++	}
++}
+diff -urN linux-4.14-01/drivers/gpu/drm/i915/intel_display.c linux-4.14-02/drivers/gpu/drm/i915/intel_display.c
+--- linux-4.14-01/drivers/gpu/drm/i915/intel_display.c	2018-01-29 14:51:28.728061298 +0000
++++ linux-4.14-02/drivers/gpu/drm/i915/intel_display.c	2018-01-29 14:51:50.023155619 +0000
+@@ -11645,7 +11645,7 @@
+ 	sw_config = to_intel_crtc_state(new_crtc_state);
+ 	if (!intel_pipe_config_compare(dev_priv, sw_config,
+ 				       pipe_config, false)) {
+-		I915_STATE_WARN(1, "pipe state doesn't match!\n");
++		DRM_DEBUG_KMS("pipe state doesn't match!\n");
+ 		intel_dump_pipe_config(intel_crtc, pipe_config,
+ 				       "[hw state]");
+ 		intel_dump_pipe_config(intel_crtc, sw_config,
+@@ -12677,6 +12677,55 @@
+ 	.set_crc_source = intel_crtc_set_crc_source,
+ };
+ 
++struct wait_rps_boost {
++	struct wait_queue_entry wait;
++
++	struct drm_crtc *crtc;
++	struct drm_i915_gem_request *request;
++};
++
++static int do_rps_boost(struct wait_queue_entry *_wait,
++			unsigned mode, int sync, void *key)
++{
++	struct wait_rps_boost *wait = container_of(_wait, typeof(*wait), wait);
++	struct drm_i915_gem_request *rq = wait->request;
++
++	gen6_rps_boost(rq, NULL);
++	i915_gem_request_put(rq);
++
++	drm_crtc_vblank_put(wait->crtc);
++
++	list_del(&wait->wait.entry);
++	kfree(wait);
++	return 1;
++}
++
++static void add_rps_boost_after_vblank(struct drm_crtc *crtc,
++				       struct dma_fence *fence)
++{
++	struct wait_rps_boost *wait;
++
++	if (!dma_fence_is_i915(fence))
++		return;
++
++	if (drm_crtc_vblank_get(crtc))
++		return;
++
++	wait = kmalloc(sizeof(*wait), GFP_KERNEL);
++	if (!wait) {
++		drm_crtc_vblank_put(crtc);
++		return;
++	}
++
++	wait->request = to_request(dma_fence_get(fence));
++	wait->crtc = crtc;
++
++	wait->wait.func = do_rps_boost;
++	wait->wait.flags = 0;
++
++	add_wait_queue(drm_crtc_vblank_waitqueue(crtc), &wait->wait);
++}
++
+ /**
+  * intel_prepare_plane_fb - Prepare fb for usage on plane
+  * @plane: drm plane to prepare for
+@@ -12774,12 +12823,22 @@
+ 		return ret;
+ 
+ 	if (!new_state->fence) { /* implicit fencing */
++		struct dma_fence *fence;
++
+ 		ret = i915_sw_fence_await_reservation(&intel_state->commit_ready,
+ 						      obj->resv, NULL,
+ 						      false, I915_FENCE_TIMEOUT,
+ 						      GFP_KERNEL);
+ 		if (ret < 0)
+ 			return ret;
++
++		fence = reservation_object_get_excl_rcu(obj->resv);
++		if (fence) {
++			add_rps_boost_after_vblank(new_state->crtc, fence);
++			dma_fence_put(fence);
++		}
++	} else {
++		add_rps_boost_after_vblank(new_state->crtc, new_state->fence);
+ 	}
+ 
+ 	return 0;
+diff -urN linux-4.14-01/drivers/gpu/drm/i915/intel_drv.h linux-4.14-02/drivers/gpu/drm/i915/intel_drv.h
+--- linux-4.14-01/drivers/gpu/drm/i915/intel_drv.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/i915/intel_drv.h	2018-01-29 14:51:50.024155624 +0000
+@@ -1843,7 +1843,6 @@
+ void gen6_rps_idle(struct drm_i915_private *dev_priv);
+ void gen6_rps_boost(struct drm_i915_gem_request *rq,
+ 		    struct intel_rps_client *rps);
+-void intel_queue_rps_boost_for_request(struct drm_i915_gem_request *req);
+ void g4x_wm_get_hw_state(struct drm_device *dev);
+ void vlv_wm_get_hw_state(struct drm_device *dev);
+ void ilk_wm_get_hw_state(struct drm_device *dev);
+diff -urN linux-4.14-01/drivers/gpu/drm/i915/intel_pm.c linux-4.14-02/drivers/gpu/drm/i915/intel_pm.c
+--- linux-4.14-01/drivers/gpu/drm/i915/intel_pm.c	2018-01-29 14:51:28.729061302 +0000
++++ linux-4.14-02/drivers/gpu/drm/i915/intel_pm.c	2018-01-29 14:51:50.026155634 +0000
+@@ -6178,6 +6178,7 @@
+ 		    struct intel_rps_client *rps)
+ {
+ 	struct drm_i915_private *i915 = rq->i915;
++	unsigned long flags;
+ 	bool boost;
+ 
+ 	/* This is intentionally racy! We peek at the state here, then
+@@ -6187,13 +6188,13 @@
+ 		return;
+ 
+ 	boost = false;
+-	spin_lock_irq(&rq->lock);
++	spin_lock_irqsave(&rq->lock, flags);
+ 	if (!rq->waitboost && !i915_gem_request_completed(rq)) {
+ 		atomic_inc(&i915->rps.num_waiters);
+ 		rq->waitboost = true;
+ 		boost = true;
+ 	}
+-	spin_unlock_irq(&rq->lock);
++	spin_unlock_irqrestore(&rq->lock, flags);
+ 	if (!boost)
+ 		return;
+ 
+@@ -9118,43 +9119,6 @@
+ 		return DIV_ROUND_CLOSEST(val, GT_FREQUENCY_MULTIPLIER);
+ }
+ 
+-struct request_boost {
+-	struct work_struct work;
+-	struct drm_i915_gem_request *req;
+-};
+-
+-static void __intel_rps_boost_work(struct work_struct *work)
+-{
+-	struct request_boost *boost = container_of(work, struct request_boost, work);
+-	struct drm_i915_gem_request *req = boost->req;
+-
+-	if (!i915_gem_request_completed(req))
+-		gen6_rps_boost(req, NULL);
+-
+-	i915_gem_request_put(req);
+-	kfree(boost);
+-}
+-
+-void intel_queue_rps_boost_for_request(struct drm_i915_gem_request *req)
+-{
+-	struct request_boost *boost;
+-
+-	if (req == NULL || INTEL_GEN(req->i915) < 6)
+-		return;
+-
+-	if (i915_gem_request_completed(req))
+-		return;
+-
+-	boost = kmalloc(sizeof(*boost), GFP_ATOMIC);
+-	if (boost == NULL)
+-		return;
+-
+-	boost->req = i915_gem_request_get(req);
+-
+-	INIT_WORK(&boost->work, __intel_rps_boost_work);
+-	queue_work(req->i915->wq, &boost->work);
+-}
+-
+ void intel_pm_setup(struct drm_i915_private *dev_priv)
+ {
+ 	mutex_init(&dev_priv->rps.hw_lock);
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_cmd.c linux-4.14-02/drivers/gpu/drm/qxl/qxl_cmd.c
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_cmd.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_cmd.c	2018-01-29 14:51:50.044155718 +0000
+@@ -219,7 +219,7 @@
+ 	union qxl_release_info *info;
+ 
+ 	while (qxl_ring_pop(qdev->release_ring, &id)) {
+-		QXL_INFO(qdev, "popped %lld\n", id);
++		DRM_DEBUG_DRIVER("popped %lld\n", id);
+ 		while (id) {
+ 			release = qxl_release_from_id_locked(qdev, id);
+ 			if (release == NULL)
+@@ -229,8 +229,8 @@
+ 			next_id = info->next;
+ 			qxl_release_unmap(qdev, release, info);
+ 
+-			QXL_INFO(qdev, "popped %lld, next %lld\n", id,
+-				next_id);
++			DRM_DEBUG_DRIVER("popped %lld, next %lld\n", id,
++					 next_id);
+ 
+ 			switch (release->type) {
+ 			case QXL_RELEASE_DRAWABLE:
+@@ -248,7 +248,7 @@
+ 		}
+ 	}
+ 
+-	QXL_INFO(qdev, "%s: %d\n", __func__, i);
++	DRM_DEBUG_DRIVER("%d\n", i);
+ 
+ 	return i;
+ }
+@@ -381,17 +381,19 @@
+ {
+ 	struct qxl_surface_create *create;
+ 
+-	QXL_INFO(qdev, "%s: qdev %p, ram_header %p\n", __func__, qdev,
+-		 qdev->ram_header);
++	DRM_DEBUG_DRIVER("qdev %p, ram_header %p\n", qdev, qdev->ram_header);
+ 	create = &qdev->ram_header->create_surface;
+ 	create->format = bo->surf.format;
+ 	create->width = bo->surf.width;
+ 	create->height = bo->surf.height;
+ 	create->stride = bo->surf.stride;
+-	create->mem = qxl_bo_physical_address(qdev, bo, offset);
++	if (bo->shadow) {
++		create->mem = qxl_bo_physical_address(qdev, bo->shadow, offset);
++	} else {
++		create->mem = qxl_bo_physical_address(qdev, bo, offset);
++	}
+ 
+-	QXL_INFO(qdev, "%s: mem = %llx, from %p\n", __func__, create->mem,
+-		 bo->kptr);
++	DRM_DEBUG_DRIVER("mem = %llx, from %p\n", create->mem, bo->kptr);
+ 
+ 	create->flags = QXL_SURF_FLAG_KEEP_DATA;
+ 	create->type = QXL_SURF_TYPE_PRIMARY;
+@@ -401,7 +403,7 @@
+ 
+ void qxl_io_memslot_add(struct qxl_device *qdev, uint8_t id)
+ {
+-	QXL_INFO(qdev, "qxl_memslot_add %d\n", id);
++	DRM_DEBUG_DRIVER("qxl_memslot_add %d\n", id);
+ 	wait_for_io_cmd(qdev, id, QXL_IO_MEMSLOT_ADD_ASYNC);
+ }
+ 
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_display.c linux-4.14-02/drivers/gpu/drm/qxl/qxl_display.c
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_display.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_display.c	2018-01-29 14:51:50.045155722 +0000
+@@ -305,7 +305,9 @@
+ void qxl_user_framebuffer_destroy(struct drm_framebuffer *fb)
+ {
+ 	struct qxl_framebuffer *qxl_fb = to_qxl_framebuffer(fb);
++	struct qxl_bo *bo = gem_to_qxl_bo(qxl_fb->obj);
+ 
++	WARN_ON(bo->shadow);
+ 	drm_gem_object_unreference_unlocked(qxl_fb->obj);
+ 	drm_framebuffer_cleanup(fb);
+ 	kfree(qxl_fb);
+@@ -508,6 +510,7 @@
+ 	    .x2 = qfb->base.width,
+ 	    .y2 = qfb->base.height
+ 	};
++	bool same_shadow = false;
+ 
+ 	if (old_state->fb) {
+ 		qfb_old = to_qxl_framebuffer(old_state->fb);
+@@ -519,15 +522,23 @@
+ 	if (bo == bo_old)
+ 		return;
+ 
++	if (bo_old && bo_old->shadow && bo->shadow &&
++	    bo_old->shadow == bo->shadow) {
++		same_shadow = true;
++	}
++
+ 	if (bo_old && bo_old->is_primary) {
+-		qxl_io_destroy_primary(qdev);
++		if (!same_shadow)
++			qxl_io_destroy_primary(qdev);
+ 		bo_old->is_primary = false;
+ 	}
+ 
+ 	if (!bo->is_primary) {
+-		qxl_io_create_primary(qdev, 0, bo);
++		if (!same_shadow)
++			qxl_io_create_primary(qdev, 0, bo);
+ 		bo->is_primary = true;
+ 	}
++
+ 	qxl_draw_dirty_fb(qdev, qfb, bo, 0, 0, &norect, 1, 1);
+ }
+ 
+@@ -679,8 +690,9 @@
+ static int qxl_plane_prepare_fb(struct drm_plane *plane,
+ 				struct drm_plane_state *new_state)
+ {
++	struct qxl_device *qdev = plane->dev->dev_private;
+ 	struct drm_gem_object *obj;
+-	struct qxl_bo *user_bo;
++	struct qxl_bo *user_bo, *old_bo = NULL;
+ 	int ret;
+ 
+ 	if (!new_state->fb)
+@@ -689,6 +701,32 @@
+ 	obj = to_qxl_framebuffer(new_state->fb)->obj;
+ 	user_bo = gem_to_qxl_bo(obj);
+ 
++	if (plane->type == DRM_PLANE_TYPE_PRIMARY &&
++	    user_bo->is_dumb && !user_bo->shadow) {
++		if (plane->state->fb) {
++			obj = to_qxl_framebuffer(plane->state->fb)->obj;
++			old_bo = gem_to_qxl_bo(obj);
++		}
++		if (old_bo && old_bo->shadow &&
++		    user_bo->gem_base.size == old_bo->gem_base.size &&
++		    plane->state->crtc     == new_state->crtc &&
++		    plane->state->crtc_w   == new_state->crtc_w &&
++		    plane->state->crtc_h   == new_state->crtc_h &&
++		    plane->state->src_x    == new_state->src_x &&
++		    plane->state->src_y    == new_state->src_y &&
++		    plane->state->src_w    == new_state->src_w &&
++		    plane->state->src_h    == new_state->src_h &&
++		    plane->state->rotation == new_state->rotation &&
++		    plane->state->zpos     == new_state->zpos) {
++			drm_gem_object_get(&old_bo->shadow->gem_base);
++			user_bo->shadow = old_bo->shadow;
++		} else {
++			qxl_bo_create(qdev, user_bo->gem_base.size,
++				      true, true, QXL_GEM_DOMAIN_VRAM, NULL,
++				      &user_bo->shadow);
++		}
++	}
++
+ 	ret = qxl_bo_pin(user_bo, QXL_GEM_DOMAIN_CPU, NULL);
+ 	if (ret)
+ 		return ret;
+@@ -713,6 +751,11 @@
+ 	obj = to_qxl_framebuffer(old_state->fb)->obj;
+ 	user_bo = gem_to_qxl_bo(obj);
+ 	qxl_bo_unpin(user_bo);
++
++	if (user_bo->shadow && !user_bo->is_primary) {
++		drm_gem_object_put_unlocked(&user_bo->shadow->gem_base);
++		user_bo->shadow = NULL;
++	}
+ }
+ 
+ static const uint32_t qxl_cursor_plane_formats[] = {
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_drv.h linux-4.14-02/drivers/gpu/drm/qxl/qxl_drv.h
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_drv.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_drv.h	2018-01-29 14:51:50.045155722 +0000
+@@ -62,33 +62,9 @@
+ 
+ #define QXL_DEBUGFS_MAX_COMPONENTS		32
+ 
+-extern int qxl_log_level;
+ extern int qxl_num_crtc;
+ extern int qxl_max_ioctls;
+ 
+-enum {
+-	QXL_INFO_LEVEL = 1,
+-	QXL_DEBUG_LEVEL = 2,
+-};
+-
+-#define QXL_INFO(qdev, fmt, ...) do { \
+-		if (qxl_log_level >= QXL_INFO_LEVEL) {	\
+-			qxl_io_log(qdev, fmt, __VA_ARGS__); \
+-		}	\
+-	} while (0)
+-#define QXL_DEBUG(qdev, fmt, ...) do { \
+-		if (qxl_log_level >= QXL_DEBUG_LEVEL) {	\
+-			qxl_io_log(qdev, fmt, __VA_ARGS__); \
+-		}	\
+-	} while (0)
+-#define QXL_INFO_ONCE(qdev, fmt, ...) do { \
+-		static int done;		\
+-		if (!done) {			\
+-			done = 1;			\
+-			QXL_INFO(qdev, fmt, __VA_ARGS__);	\
+-		}						\
+-	} while (0)
+-
+ #define DRM_FILE_OFFSET 0x100000000ULL
+ #define DRM_FILE_PAGE_OFFSET (DRM_FILE_OFFSET >> PAGE_SHIFT)
+ 
+@@ -113,6 +89,8 @@
+ 	/* Constant after initialization */
+ 	struct drm_gem_object		gem_base;
+ 	bool is_primary; /* is this now a primary surface */
++	bool is_dumb;
++	struct qxl_bo *shadow;
+ 	bool hw_surf_alloc;
+ 	struct qxl_surface surf;
+ 	uint32_t surface_id;
+@@ -351,7 +329,7 @@
+ static inline void *
+ qxl_fb_virtual_address(struct qxl_device *qdev, unsigned long physical)
+ {
+-	QXL_INFO(qdev, "not implemented (%lu)\n", physical);
++	DRM_DEBUG_DRIVER("not implemented (%lu)\n", physical);
+ 	return 0;
+ }
+ 
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_dumb.c linux-4.14-02/drivers/gpu/drm/qxl/qxl_dumb.c
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_dumb.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_dumb.c	2018-01-29 14:51:50.045155722 +0000
+@@ -63,6 +63,7 @@
+ 					      &handle);
+ 	if (r)
+ 		return r;
++	qobj->is_dumb = true;
+ 	args->pitch = pitch;
+ 	args->handle = handle;
+ 	return 0;
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_fb.c linux-4.14-02/drivers/gpu/drm/qxl/qxl_fb.c
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_fb.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_fb.c	2018-01-29 14:51:50.043155713 +0000
+@@ -240,18 +240,15 @@
+ 		return ret;
+ 
+ 	qbo = gem_to_qxl_bo(gobj);
+-	QXL_INFO(qdev, "%s: %dx%d %d\n", __func__, mode_cmd.width,
+-		 mode_cmd.height, mode_cmd.pitches[0]);
++	DRM_DEBUG_DRIVER("%dx%d %d\n", mode_cmd.width,
++			 mode_cmd.height, mode_cmd.pitches[0]);
+ 
+ 	shadow = vmalloc(mode_cmd.pitches[0] * mode_cmd.height);
+ 	/* TODO: what's the usual response to memory allocation errors? */
+ 	BUG_ON(!shadow);
+-	QXL_INFO(qdev,
+-	"surface0 at gpu offset %lld, mmap_offset %lld (virt %p, shadow %p)\n",
+-		 qxl_bo_gpu_offset(qbo),
+-		 qxl_bo_mmap_offset(qbo),
+-		 qbo->kptr,
+-		 shadow);
++	DRM_DEBUG_DRIVER("surface0 at gpu offset %lld, mmap_offset %lld (virt %p, shadow %p)\n",
++			 qxl_bo_gpu_offset(qbo), qxl_bo_mmap_offset(qbo),
++			 qbo->kptr, shadow);
+ 	size = mode_cmd.pitches[0] * mode_cmd.height;
+ 
+ 	info = drm_fb_helper_alloc_fbi(&qfbdev->helper);
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_release.c linux-4.14-02/drivers/gpu/drm/qxl/qxl_release.c
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_release.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_release.c	2018-01-29 14:51:50.043155713 +0000
+@@ -154,7 +154,7 @@
+ 		return handle;
+ 	}
+ 	*ret = release;
+-	QXL_INFO(qdev, "allocated release %d\n", handle);
++	DRM_DEBUG_DRIVER("allocated release %d\n", handle);
+ 	release->id = handle;
+ 	return handle;
+ }
+@@ -179,8 +179,7 @@
+ qxl_release_free(struct qxl_device *qdev,
+ 		 struct qxl_release *release)
+ {
+-	QXL_INFO(qdev, "release %d, type %d\n", release->id,
+-		 release->type);
++	DRM_DEBUG_DRIVER("release %d, type %d\n", release->id, release->type);
+ 
+ 	if (release->surface_release_id)
+ 		qxl_surface_id_dealloc(qdev, release->surface_release_id);
+diff -urN linux-4.14-01/drivers/gpu/drm/qxl/qxl_ttm.c linux-4.14-02/drivers/gpu/drm/qxl/qxl_ttm.c
+--- linux-4.14-01/drivers/gpu/drm/qxl/qxl_ttm.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/gpu/drm/qxl/qxl_ttm.c	2018-01-29 14:51:50.043155713 +0000
+@@ -136,8 +136,8 @@
+ 		 "filp->private_data->minor->dev->dev_private == NULL\n");
+ 		return -EINVAL;
+ 	}
+-	QXL_INFO(qdev, "%s: filp->private_data = 0x%p, vma->vm_pgoff = %lx\n",
+-		 __func__, filp->private_data, vma->vm_pgoff);
++	DRM_DEBUG_DRIVER("filp->private_data = 0x%p, vma->vm_pgoff = %lx\n",
++		  filp->private_data, vma->vm_pgoff);
+ 
+ 	r = ttm_bo_mmap(filp, vma, &qdev->mman.bdev);
+ 	if (unlikely(r != 0))
+diff -urN linux-4.14-01/drivers/hid/hid-rmi.c linux-4.14-02/drivers/hid/hid-rmi.c
+--- linux-4.14-01/drivers/hid/hid-rmi.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/hid/hid-rmi.c	2018-01-29 14:51:50.053155760 +0000
+@@ -316,19 +316,12 @@
+ {
+ 	struct rmi_data *hdata = hid_get_drvdata(hdev);
+ 	struct rmi_device *rmi_dev = hdata->xport.rmi_dev;
+-	unsigned long flags;
+ 
+ 	if (!(test_bit(RMI_STARTED, &hdata->flags)))
+ 		return 0;
+ 
+-	local_irq_save(flags);
+-
+ 	rmi_set_attn_data(rmi_dev, data[1], &data[2], size - 2);
+ 
+-	generic_handle_irq(hdata->rmi_irq);
+-
+-	local_irq_restore(flags);
+-
+ 	return 1;
+ }
+ 
+@@ -368,6 +361,11 @@
+ static int rmi_raw_event(struct hid_device *hdev,
+ 		struct hid_report *report, u8 *data, int size)
+ {
++	struct rmi_data *hdata = hid_get_drvdata(hdev);
++
++	if (!(hdata->device_flags & RMI_DEVICE))
++		return 0;
++
+ 	size = rmi_check_sanity(hdev, data, size);
+ 	if (size < 2)
+ 		return 0;
+@@ -563,56 +561,6 @@
+ 	.reset		= rmi_hid_reset,
+ };
+ 
+-static void rmi_irq_teardown(void *data)
+-{
+-	struct rmi_data *hdata = data;
+-	struct irq_domain *domain = hdata->domain;
+-
+-	if (!domain)
+-		return;
+-
+-	irq_dispose_mapping(irq_find_mapping(domain, 0));
+-
+-	irq_domain_remove(domain);
+-	hdata->domain = NULL;
+-	hdata->rmi_irq = 0;
+-}
+-
+-static int rmi_irq_map(struct irq_domain *h, unsigned int virq,
+-		       irq_hw_number_t hw_irq_num)
+-{
+-	irq_set_chip_and_handler(virq, &dummy_irq_chip, handle_simple_irq);
+-
+-	return 0;
+-}
+-
+-static const struct irq_domain_ops rmi_irq_ops = {
+-	.map = rmi_irq_map,
+-};
+-
+-static int rmi_setup_irq_domain(struct hid_device *hdev)
+-{
+-	struct rmi_data *hdata = hid_get_drvdata(hdev);
+-	int ret;
+-
+-	hdata->domain = irq_domain_create_linear(hdev->dev.fwnode, 1,
+-						 &rmi_irq_ops, hdata);
+-	if (!hdata->domain)
+-		return -ENOMEM;
+-
+-	ret = devm_add_action_or_reset(&hdev->dev, &rmi_irq_teardown, hdata);
+-	if (ret)
+-		return ret;
+-
+-	hdata->rmi_irq = irq_create_mapping(hdata->domain, 0);
+-	if (hdata->rmi_irq <= 0) {
+-		hid_err(hdev, "Can't allocate an IRQ\n");
+-		return hdata->rmi_irq < 0 ? hdata->rmi_irq : -ENXIO;
+-	}
+-
+-	return 0;
+-}
+-
+ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
+ {
+ 	struct rmi_data *data = NULL;
+@@ -684,18 +632,11 @@
+ 
+ 	mutex_init(&data->page_mutex);
+ 
+-	ret = rmi_setup_irq_domain(hdev);
+-	if (ret) {
+-		hid_err(hdev, "failed to allocate IRQ domain\n");
+-		return ret;
+-	}
+-
+ 	if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS)
+ 		rmi_hid_pdata.f30_data.disable = true;
+ 
+ 	data->xport.dev = hdev->dev.parent;
+ 	data->xport.pdata = rmi_hid_pdata;
+-	data->xport.pdata.irq = data->rmi_irq;
+ 	data->xport.proto_name = "hid";
+ 	data->xport.ops = &hid_rmi_ops;
+ 
+@@ -713,9 +654,11 @@
+ {
+ 	struct rmi_data *hdata = hid_get_drvdata(hdev);
+ 
+-	clear_bit(RMI_STARTED, &hdata->flags);
+-	cancel_work_sync(&hdata->reset_work);
+-	rmi_unregister_transport_device(&hdata->xport);
++	if (hdata->device_flags & RMI_DEVICE) {
++		clear_bit(RMI_STARTED, &hdata->flags);
++		cancel_work_sync(&hdata->reset_work);
++		rmi_unregister_transport_device(&hdata->xport);
++	}
+ 
+ 	hid_hw_stop(hdev);
+ }
+diff -urN linux-4.14-01/drivers/input/keyboard/atkbd.c linux-4.14-02/drivers/input/keyboard/atkbd.c
+--- linux-4.14-01/drivers/input/keyboard/atkbd.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/keyboard/atkbd.c	2018-01-29 14:51:49.742154302 +0000
+@@ -436,11 +436,15 @@
+ 		goto out;
+ 	case ATKBD_RET_ACK:
+ 	case ATKBD_RET_NAK:
++# if 0
++		/* Quite a few key switchers and other tools trigger this
++		 * and it confuses people who can do nothing about it */
+ 		if (printk_ratelimit())
+ 			dev_warn(&serio->dev,
+ 				 "Spurious %s on %s. "
+ 				 "Some program might be trying to access hardware directly.\n",
+ 				 data == ATKBD_RET_ACK ? "ACK" : "NAK", serio->phys);
++#endif
+ 		goto out;
+ 	case ATKBD_RET_ERR:
+ 		atkbd->err_count++;
+diff -urN linux-4.14-01/drivers/input/keyboard/gpio_keys.c linux-4.14-02/drivers/input/keyboard/gpio_keys.c
+--- linux-4.14-01/drivers/input/keyboard/gpio_keys.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/keyboard/gpio_keys.c	2018-01-29 14:51:49.977155404 +0000
+@@ -38,6 +38,7 @@
+ 
+ 	unsigned short *code;
+ 
++	struct timer_list unsuspend_timer;
+ 	struct timer_list release_timer;
+ 	unsigned int release_delay;	/* in msecs, for IRQ-only buttons */
+ 
+@@ -371,6 +372,9 @@
+ 		return;
+ 	}
+ 
++	if (state && bdata->button->no_wakeup_events && bdata->suspended)
++		return;
++
+ 	if (type == EV_ABS) {
+ 		if (state)
+ 			input_event(input, type, button->code, button->value);
+@@ -400,6 +404,9 @@
+ 	if (bdata->button->wakeup) {
+ 		const struct gpio_keys_button *button = bdata->button;
+ 
++		if (bdata->button->no_wakeup_events && bdata->suspended)
++			return IRQ_HANDLED;
++
+ 		pm_stay_awake(bdata->input->dev.parent);
+ 		if (bdata->suspended  &&
+ 		    (button->type == 0 || button->type == EV_KEY)) {
+@@ -445,9 +452,13 @@
+ 	spin_lock_irqsave(&bdata->lock, flags);
+ 
+ 	if (!bdata->key_pressed) {
+-		if (bdata->button->wakeup)
++		if (bdata->button->wakeup) {
+ 			pm_wakeup_event(bdata->input->dev.parent, 0);
+ 
++			if (bdata->button->no_wakeup_events && bdata->suspended)
++				goto out;
++		}
++
+ 		input_event(input, EV_KEY, *bdata->code, 1);
+ 		input_sync(input);
+ 
+@@ -468,6 +479,13 @@
+ 	return IRQ_HANDLED;
+ }
+ 
++static void gpio_keys_unsuspend_timer(unsigned long _data)
++{
++	struct gpio_button_data *bdata = (struct gpio_button_data *)_data;
++
++	bdata->suspended = false;
++}
++
+ static void gpio_keys_quiesce_key(void *data)
+ {
+ 	struct gpio_button_data *bdata = data;
+@@ -476,6 +494,8 @@
+ 		cancel_delayed_work_sync(&bdata->work);
+ 	else
+ 		del_timer_sync(&bdata->release_timer);
++
++	del_timer_sync(&bdata->unsuspend_timer);
+ }
+ 
+ static int gpio_keys_setup_key(struct platform_device *pdev,
+@@ -496,6 +516,8 @@
+ 	bdata->input = input;
+ 	bdata->button = button;
+ 	spin_lock_init(&bdata->lock);
++	setup_timer(&bdata->unsuspend_timer, gpio_keys_unsuspend_timer,
++		    (unsigned long)bdata);
+ 
+ 	if (child) {
+ 		bdata->gpiod = devm_fwnode_get_gpiod_from_child(dev, NULL,
+@@ -857,6 +879,7 @@
+ 			struct gpio_button_data *bdata = &ddata->data[i];
+ 			if (bdata->button->wakeup)
+ 				enable_irq_wake(bdata->irq);
++			del_timer_sync(&bdata->unsuspend_timer);
+ 			bdata->suspended = true;
+ 		}
+ 	} else {
+@@ -881,7 +904,13 @@
+ 			struct gpio_button_data *bdata = &ddata->data[i];
+ 			if (bdata->button->wakeup)
+ 				disable_irq_wake(bdata->irq);
+-			bdata->suspended = false;
++			if (bdata->button->no_wakeup_events) {
++				mod_timer(&bdata->unsuspend_timer, jiffies +
++					  msecs_to_jiffies(
++						    bdata->software_debounce));
++			} else {
++				bdata->suspended = false;
++			}
+ 		}
+ 	} else {
+ 		mutex_lock(&input->mutex);
+diff -urN linux-4.14-01/drivers/input/misc/pcspkr.c linux-4.14-02/drivers/input/misc/pcspkr.c
+--- linux-4.14-01/drivers/input/misc/pcspkr.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/misc/pcspkr.c	2018-01-29 14:51:49.756154368 +0000
+@@ -23,7 +23,6 @@
+ MODULE_AUTHOR("Vojtech Pavlik <vojtech@ucw.cz>");
+ MODULE_DESCRIPTION("PC Speaker beeper driver");
+ MODULE_LICENSE("GPL");
+-MODULE_ALIAS("platform:pcspkr");
+ 
+ static int pcspkr_event(struct input_dev *dev, unsigned int type,
+ 			unsigned int code, int value)
+diff -urN linux-4.14-01/drivers/input/misc/soc_button_array.c linux-4.14-02/drivers/input/misc/soc_button_array.c
+--- linux-4.14-01/drivers/input/misc/soc_button_array.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/misc/soc_button_array.c	2018-01-29 14:51:49.992155474 +0000
+@@ -27,6 +27,7 @@
+ 	unsigned int event_code;
+ 	bool autorepeat;
+ 	bool wakeup;
++	bool no_wakeup_events;
+ };
+ 
+ /*
+@@ -100,6 +101,7 @@
+ 		gpio_keys[n_buttons].active_low = 1;
+ 		gpio_keys[n_buttons].desc = info->name;
+ 		gpio_keys[n_buttons].wakeup = info->wakeup;
++		gpio_keys[n_buttons].no_wakeup_events = info->no_wakeup_events;
+ 		/* These devices often use cheap buttons, use 50 ms debounce */
+ 		gpio_keys[n_buttons].debounce_interval = 50;
+ 		n_buttons++;
+@@ -185,6 +187,7 @@
+ 		info->name = "power";
+ 		info->event_code = KEY_POWER;
+ 		info->wakeup = true;
++		info->no_wakeup_events = true;
+ 	} else if (upage == 0x07 && usage == 0xe3) {
+ 		info->name = "home";
+ 		info->event_code = KEY_LEFTMETA;
+@@ -369,7 +372,7 @@
+  * Platforms"
+  */
+ static struct soc_button_info soc_button_PNP0C40[] = {
+-	{ "power", 0, EV_KEY, KEY_POWER, false, true },
++	{ "power", 0, EV_KEY, KEY_POWER, false, true, true },
+ 	{ "home", 1, EV_KEY, KEY_LEFTMETA, false, true },
+ 	{ "volume_up", 2, EV_KEY, KEY_VOLUMEUP, true, false },
+ 	{ "volume_down", 3, EV_KEY, KEY_VOLUMEDOWN, true, false },
+diff -urN linux-4.14-01/drivers/input/misc/uinput.c linux-4.14-02/drivers/input/misc/uinput.c
+--- linux-4.14-01/drivers/input/misc/uinput.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/misc/uinput.c	2018-01-29 14:51:49.829154710 +0000
+@@ -408,6 +408,7 @@
+ 	if (!udev->dev)
+ 		return -ENOMEM;
+ 
++	udev->dev->flags |= INPUTDEV_FLAGS_SYNTHETIC;
+ 	udev->dev->event = uinput_dev_event;
+ 	input_set_drvdata(udev->dev, udev);
+ 
+diff -urN linux-4.14-01/drivers/input/mouse/synaptics.c linux-4.14-02/drivers/input/mouse/synaptics.c
+--- linux-4.14-01/drivers/input/mouse/synaptics.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/mouse/synaptics.c	2018-01-29 14:51:50.034155671 +0000
+@@ -172,6 +172,7 @@
+ 	"LEN0048", /* X1 Carbon 3 */
+ 	"LEN0046", /* X250 */
+ 	"LEN004a", /* W541 */
++	"LEN0073", /* X1 Carbon 5 */
+ 	"LEN200f", /* T450s */
+ 	NULL
+ };
+@@ -992,6 +993,14 @@
+ 		input_report_abs(dev, ABS_MT_PRESSURE, hw[i]->z);
+ 	}
+ 
++	/* keep (slot count <= num_fingers) by pinning all slots */
++	if (num_fingers >= 3) {
++		for (i = 0; i < 3; i++) {
++			input_mt_slot(dev, i);
++			input_mt_report_slot_state(dev, MT_TOOL_FINGER, true);
++		}
++	}
++
+ 	input_mt_drop_unused(dev);
+ 
+ 	/* Don't use active slot count to generate BTN_TOOL events. */
+diff -urN linux-4.14-01/drivers/input/rmi4/rmi_driver.c linux-4.14-02/drivers/input/rmi4/rmi_driver.c
+--- linux-4.14-01/drivers/input/rmi4/rmi_driver.c	2018-01-29 14:51:28.743061364 +0000
++++ linux-4.14-02/drivers/input/rmi4/rmi_driver.c	2018-01-29 14:51:50.015155582 +0000
+@@ -209,34 +209,47 @@
+ 	attn_data.data = fifo_data;
+ 
+ 	kfifo_put(&drvdata->attn_fifo, attn_data);
++
++	schedule_work(&drvdata->attn_work);
+ }
+ EXPORT_SYMBOL_GPL(rmi_set_attn_data);
+ 
+-static irqreturn_t rmi_irq_fn(int irq, void *dev_id)
++static void attn_callback(struct work_struct *work)
+ {
+-	struct rmi_device *rmi_dev = dev_id;
+-	struct rmi_driver_data *drvdata = dev_get_drvdata(&rmi_dev->dev);
++	struct rmi_driver_data *drvdata = container_of(work,
++							struct rmi_driver_data,
++							attn_work);
+ 	struct rmi4_attn_data attn_data = {0};
+ 	int ret, count;
+ 
+ 	count = kfifo_get(&drvdata->attn_fifo, &attn_data);
+-	if (count) {
+-		*(drvdata->irq_status) = attn_data.irq_status;
+-		drvdata->attn_data = attn_data;
+-	}
++	if (!count)
++		return;
+ 
+-	ret = rmi_process_interrupt_requests(rmi_dev);
++	*(drvdata->irq_status) = attn_data.irq_status;
++	drvdata->attn_data = attn_data;
++
++	ret = rmi_process_interrupt_requests(drvdata->rmi_dev);
+ 	if (ret)
+-		rmi_dbg(RMI_DEBUG_CORE, &rmi_dev->dev,
++		rmi_dbg(RMI_DEBUG_CORE, &drvdata->rmi_dev->dev,
+ 			"Failed to process interrupt request: %d\n", ret);
+ 
+-	if (count) {
+-		kfree(attn_data.data);
+-		attn_data.data = NULL;
+-	}
++	kfree(attn_data.data);
++	attn_data.data = NULL;
+ 
+ 	if (!kfifo_is_empty(&drvdata->attn_fifo))
+-		return rmi_irq_fn(irq, dev_id);
++		schedule_work(&drvdata->attn_work);
++}
++
++static irqreturn_t rmi_irq_fn(int irq, void *dev_id)
++{
++	struct rmi_device *rmi_dev = dev_id;
++	int ret;
++
++	ret = rmi_process_interrupt_requests(rmi_dev);
++	if (ret)
++		rmi_dbg(RMI_DEBUG_CORE, &rmi_dev->dev,
++			"Failed to process interrupt request: %d\n", ret);
+ 
+ 	return IRQ_HANDLED;
+ }
+@@ -244,7 +257,6 @@
+ static int rmi_irq_init(struct rmi_device *rmi_dev)
+ {
+ 	struct rmi_device_platform_data *pdata = rmi_get_platform_data(rmi_dev);
+-	struct rmi_driver_data *data = dev_get_drvdata(&rmi_dev->dev);
+ 	int irq_flags = irq_get_trigger_type(pdata->irq);
+ 	int ret;
+ 
+@@ -262,8 +274,6 @@
+ 		return ret;
+ 	}
+ 
+-	data->enabled = true;
+-
+ 	return 0;
+ }
+ 
+@@ -912,23 +922,27 @@
+ 	if (data->enabled)
+ 		goto out;
+ 
+-	enable_irq(irq);
+-	data->enabled = true;
+-	if (clear_wake && device_may_wakeup(rmi_dev->xport->dev)) {
+-		retval = disable_irq_wake(irq);
+-		if (retval)
+-			dev_warn(&rmi_dev->dev,
+-				 "Failed to disable irq for wake: %d\n",
+-				 retval);
+-	}
++	if (irq) {
++		enable_irq(irq);
++		data->enabled = true;
++		if (clear_wake && device_may_wakeup(rmi_dev->xport->dev)) {
++			retval = disable_irq_wake(irq);
++			if (retval)
++				dev_warn(&rmi_dev->dev,
++					 "Failed to disable irq for wake: %d\n",
++					 retval);
++		}
+ 
+-	/*
+-	 * Call rmi_process_interrupt_requests() after enabling irq,
+-	 * otherwise we may lose interrupt on edge-triggered systems.
+-	 */
+-	irq_flags = irq_get_trigger_type(pdata->irq);
+-	if (irq_flags & IRQ_TYPE_EDGE_BOTH)
+-		rmi_process_interrupt_requests(rmi_dev);
++		/*
++		 * Call rmi_process_interrupt_requests() after enabling irq,
++		 * otherwise we may lose interrupt on edge-triggered systems.
++		 */
++		irq_flags = irq_get_trigger_type(pdata->irq);
++		if (irq_flags & IRQ_TYPE_EDGE_BOTH)
++			rmi_process_interrupt_requests(rmi_dev);
++	} else {
++		data->enabled = true;
++	}
+ 
+ out:
+ 	mutex_unlock(&data->enabled_mutex);
+@@ -948,20 +962,22 @@
+ 		goto out;
+ 
+ 	data->enabled = false;
+-	disable_irq(irq);
+-	if (enable_wake && device_may_wakeup(rmi_dev->xport->dev)) {
+-		retval = enable_irq_wake(irq);
+-		if (retval)
+-			dev_warn(&rmi_dev->dev,
+-				 "Failed to enable irq for wake: %d\n",
+-				 retval);
+-	}
+-
+-	/* make sure the fifo is clean */
+-	while (!kfifo_is_empty(&data->attn_fifo)) {
+-		count = kfifo_get(&data->attn_fifo, &attn_data);
+-		if (count)
+-			kfree(attn_data.data);
++	if (irq) {
++		disable_irq(irq);
++		if (enable_wake && device_may_wakeup(rmi_dev->xport->dev)) {
++			retval = enable_irq_wake(irq);
++			if (retval)
++				dev_warn(&rmi_dev->dev,
++					 "Failed to enable irq for wake: %d\n",
++					 retval);
++		}
++	} else {
++		/* make sure the fifo is clean */
++		while (!kfifo_is_empty(&data->attn_fifo)) {
++			count = kfifo_get(&data->attn_fifo, &attn_data);
++			if (count)
++				kfree(attn_data.data);
++		}
+ 	}
+ 
+ out:
+@@ -1000,9 +1016,12 @@
+ static int rmi_driver_remove(struct device *dev)
+ {
+ 	struct rmi_device *rmi_dev = to_rmi_device(dev);
++	struct rmi_driver_data *data = dev_get_drvdata(&rmi_dev->dev);
+ 
+ 	rmi_disable_irq(rmi_dev, false);
+ 
++	cancel_work_sync(&data->attn_work);
++
+ 	rmi_f34_remove_sysfs(rmi_dev);
+ 	rmi_free_function_list(rmi_dev);
+ 
+@@ -1232,9 +1251,15 @@
+ 		}
+ 	}
+ 
+-	retval = rmi_irq_init(rmi_dev);
+-	if (retval < 0)
+-		goto err_destroy_functions;
++	if (pdata->irq) {
++		retval = rmi_irq_init(rmi_dev);
++		if (retval < 0)
++			goto err_destroy_functions;
++	}
++
++	data->enabled = true;
++
++	INIT_WORK(&data->attn_work, attn_callback);
+ 
+ 	if (data->f01_container->dev.driver) {
+ 		/* Driver already bound, so enable ATTN now. */
+diff -urN linux-4.14-01/drivers/input/serio/i8042.c linux-4.14-02/drivers/input/serio/i8042.c
+--- linux-4.14-01/drivers/input/serio/i8042.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/serio/i8042.c	2018-01-29 14:51:49.905155066 +0000
+@@ -1590,6 +1590,22 @@
+ 	.notifier_call = i8042_kbd_bind_notifier,
+ };
+ 
++#ifdef CONFIG_DMI
++static struct dmi_system_id __initdata dmi_system_table[] = {
++	{
++		.matches = {
++			DMI_MATCH(DMI_BIOS_VENDOR, "Apple Computer, Inc.")
++		},
++	},
++	{
++		.matches = {
++			DMI_MATCH(DMI_BIOS_VENDOR, "Apple Inc.")
++		},
++	},
++	{}
++};
++#endif /*CONFIG_DMI*/
++
+ static int __init i8042_init(void)
+ {
+ 	struct platform_device *pdev;
+@@ -1597,6 +1613,12 @@
+ 
+ 	dbg_init();
+ 
++#ifdef CONFIG_DMI
++	/* Intel Apple Macs never have an i8042 controller */
++	if (dmi_check_system(dmi_system_table) > 0)
++		return -ENODEV;
++#endif /*CONFIG_DMI*/
++
+ 	err = i8042_platform_init();
+ 	if (err)
+ 		return err;
+diff -urN linux-4.14-01/drivers/input/touchscreen/silead.c linux-4.14-02/drivers/input/touchscreen/silead.c
+--- linux-4.14-01/drivers/input/touchscreen/silead.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/input/touchscreen/silead.c	2018-01-29 14:51:49.999155507 +0000
+@@ -56,7 +56,7 @@
+ #define SILEAD_POINT_Y_MSB_OFF	0x01
+ #define SILEAD_POINT_X_OFF	0x02
+ #define SILEAD_POINT_X_MSB_OFF	0x03
+-#define SILEAD_TOUCH_ID_MASK	0xF0
++#define SILEAD_EXTRA_DATA_MASK	0xF0
+ 
+ #define SILEAD_CMD_SLEEP_MIN	10000
+ #define SILEAD_CMD_SLEEP_MAX	20000
+@@ -109,6 +109,8 @@
+ 			    INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED |
+ 			    INPUT_MT_TRACK);
+ 
++	input_set_capability(data->input, EV_KEY, KEY_LEFTMETA);
++
+ 	data->input->name = SILEAD_TS_NAME;
+ 	data->input->phys = "input/ts";
+ 	data->input->id.bustype = BUS_I2C;
+@@ -139,7 +141,8 @@
+ 	struct input_dev *input = data->input;
+ 	struct device *dev = &client->dev;
+ 	u8 *bufp, buf[SILEAD_TS_DATA_LEN];
+-	int touch_nr, error, i;
++	int touch_nr, softbutton, error, i;
++	bool softbutton_pressed = false;
+ 
+ 	error = i2c_smbus_read_i2c_block_data(client, SILEAD_REG_DATA,
+ 					      SILEAD_TS_DATA_LEN, buf);
+@@ -148,21 +151,40 @@
+ 		return;
+ 	}
+ 
+-	touch_nr = buf[0];
+-	if (touch_nr > data->max_fingers) {
++	if (buf[0] > data->max_fingers) {
+ 		dev_warn(dev, "More touches reported then supported %d > %d\n",
+-			 touch_nr, data->max_fingers);
+-		touch_nr = data->max_fingers;
++			 buf[0], data->max_fingers);
++		buf[0] = data->max_fingers;
+ 	}
+ 
++	touch_nr = 0;
+ 	bufp = buf + SILEAD_POINT_DATA_LEN;
+-	for (i = 0; i < touch_nr; i++, bufp += SILEAD_POINT_DATA_LEN) {
+-		/* Bits 4-7 are the touch id */
+-		data->id[i] = (bufp[SILEAD_POINT_X_MSB_OFF] &
+-			       SILEAD_TOUCH_ID_MASK) >> 4;
+-		touchscreen_set_mt_pos(&data->pos[i], &data->prop,
++	for (i = 0; i < buf[0]; i++, bufp += SILEAD_POINT_DATA_LEN) {
++		softbutton = (bufp[SILEAD_POINT_Y_MSB_OFF] &
++			      SILEAD_EXTRA_DATA_MASK) >> 4;
++
++		if (softbutton) {
++			/*
++			 * For now only respond to softbutton == 0x01, some
++			 * tablets *without* a capacative button send 0x04
++			 * when crossing the edges of the screen.
++			 */
++			if (softbutton == 0x01)
++				softbutton_pressed = true;
++
++			continue;
++		}
++
++		/*
++		 * Bits 4-7 are the touch id, note not all models have
++		 * hardware touch ids so atm we don't use these.
++		 */
++		data->id[touch_nr] = (bufp[SILEAD_POINT_X_MSB_OFF] &
++				      SILEAD_EXTRA_DATA_MASK) >> 4;
++		touchscreen_set_mt_pos(&data->pos[touch_nr], &data->prop,
+ 			get_unaligned_le16(&bufp[SILEAD_POINT_X_OFF]) & 0xfff,
+ 			get_unaligned_le16(&bufp[SILEAD_POINT_Y_OFF]) & 0xfff);
++		touch_nr++;
+ 	}
+ 
+ 	input_mt_assign_slots(input, data->slots, data->pos, touch_nr, 0);
+@@ -178,6 +200,7 @@
+ 	}
+ 
+ 	input_mt_sync_frame(input);
++	input_report_key(input, KEY_LEFTMETA, softbutton_pressed);
+ 	input_sync(input);
+ }
+ 
+diff -urN linux-4.14-01/drivers/media/usb/uvc/uvc_v4l2.c linux-4.14-02/drivers/media/usb/uvc/uvc_v4l2.c
+--- linux-4.14-01/drivers/media/usb/uvc/uvc_v4l2.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/media/usb/uvc/uvc_v4l2.c	2018-01-29 14:51:49.957155310 +0000
+@@ -22,6 +22,7 @@
+ #include <linux/mm.h>
+ #include <linux/wait.h>
+ #include <linux/atomic.h>
++#include <linux/compiler.h>
+ 
+ #include <media/v4l2-common.h>
+ #include <media/v4l2-ctrls.h>
+@@ -810,6 +811,7 @@
+ 	struct uvc_entity *iterm = NULL;
+ 	u32 index = input->index;
+ 	int pin = 0;
++	__u8 *elem;
+ 
+ 	if (selector == NULL ||
+ 	    (chain->dev->quirks & UVC_QUIRK_IGNORE_SELECTOR_UNIT)) {
+@@ -820,8 +822,9 @@
+ 				break;
+ 		}
+ 		pin = iterm->id;
+-	} else if (index < selector->bNrInPins) {
+-		pin = selector->baSourceID[index];
++	} else if ((elem = nospec_array_ptr(selector->baSourceID, index,
++					selector->bNrInPins))) {
++		pin = *elem;
+ 		list_for_each_entry(iterm, &chain->entities, chain) {
+ 			if (!UVC_ENTITY_IS_ITERM(iterm))
+ 				continue;
+diff -urN linux-4.14-01/drivers/misc/lis3lv02d/lis3lv02d.c linux-4.14-02/drivers/misc/lis3lv02d/lis3lv02d.c
+--- linux-4.14-01/drivers/misc/lis3lv02d/lis3lv02d.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/misc/lis3lv02d/lis3lv02d.c	2018-01-29 14:51:49.783154494 +0000
+@@ -217,7 +217,8 @@
+ /* conversion btw sampling rate and the register values */
+ static int lis3_12_rates[4] = {40, 160, 640, 2560};
+ static int lis3_8_rates[2] = {100, 400};
+-static int lis3_3dc_rates[16] = {0, 1, 10, 25, 50, 100, 200, 400, 1600, 5000};
++/* LIS3DC: 0 = power off, above 9 = undefined */
++static int lis3_3dc_rates[16] = {0, 1, 10, 25, 50, 100, 200, 400, 1600, 5000, -1, -1, -1, -1, -1, -1};
+ static int lis3_3dlh_rates[4] = {50, 100, 400, 1000};
+ 
+ /* ODR is Output Data Rate */
+@@ -232,12 +233,11 @@
+ 	return lis3->odrs[(ctrl >> shift)];
+ }
+ 
+-static int lis3lv02d_get_pwron_wait(struct lis3lv02d *lis3)
++static int lis3lv02d_wait_pwron(struct lis3lv02d *lis3)
+ {
+ 	int div = lis3lv02d_get_odr(lis3);
+-
+-	if (WARN_ONCE(div == 0, "device returned spurious data"))
+-		return -ENXIO;
++	if (div <= 0)
++		div = 1; /* maximum delay */
+ 
+ 	/* LIS3 power on delay is quite long */
+ 	msleep(lis3->pwron_delay / div);
+@@ -304,7 +304,7 @@
+ 
+ 	lis3->read(lis3, ctlreg, &reg);
+ 	lis3->write(lis3, ctlreg, (reg | selftest));
+-	ret = lis3lv02d_get_pwron_wait(lis3);
++	ret = lis3lv02d_wait_pwron(lis3);
+ 	if (ret)
+ 		goto fail;
+ 
+@@ -315,7 +315,7 @@
+ 
+ 	/* back to normal settings */
+ 	lis3->write(lis3, ctlreg, reg);
+-	ret = lis3lv02d_get_pwron_wait(lis3);
++	ret = lis3lv02d_wait_pwron(lis3);
+ 	if (ret)
+ 		goto fail;
+ 
+@@ -435,7 +435,7 @@
+ 		}
+ 	}
+ 
+-	err = lis3lv02d_get_pwron_wait(lis3);
++	err = lis3lv02d_wait_pwron(lis3);
+ 	if (err)
+ 		return err;
+ 
+diff -urN linux-4.14-01/drivers/net/wireless/ath/ath9k/mac.c linux-4.14-02/drivers/net/wireless/ath/ath9k/mac.c
+--- linux-4.14-01/drivers/net/wireless/ath/ath9k/mac.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/net/wireless/ath/ath9k/mac.c	2018-01-29 14:51:49.806154602 +0000
+@@ -694,7 +694,7 @@
+ {
+ #define AH_RX_STOP_DMA_TIMEOUT 10000   /* usec */
+ 	struct ath_common *common = ath9k_hw_common(ah);
+-	u32 mac_status, last_mac_status = 0;
++	u32 mac_status = 0, last_mac_status = 0;
+ 	int i;
+ 
+ 	/* Enable access to the DMA observation bus */
+@@ -724,6 +724,16 @@
+ 	}
+ 
+ 	if (i == 0) {
++		if (!AR_SREV_9300_20_OR_LATER(ah) &&
++		    (mac_status & 0x700) == 0) {
++			/*
++			 * DMA is idle but the MAC is still stuck
++			 * processing events
++			 */
++			*reset = true;
++			return true;
++		}
++
+ 		ath_err(common,
+ 			"DMA failed to stop in %d ms AR_CR=0x%08x AR_DIAG_SW=0x%08x DMADBG_7=0x%08x\n",
+ 			AH_RX_STOP_DMA_TIMEOUT / 1000,
+diff -urN linux-4.14-01/drivers/net/wireless/ath/carl9170/main.c linux-4.14-02/drivers/net/wireless/ath/carl9170/main.c
+--- linux-4.14-01/drivers/net/wireless/ath/carl9170/main.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/net/wireless/ath/carl9170/main.c	2018-01-29 14:51:49.958155315 +0000
+@@ -41,6 +41,7 @@
+ #include <linux/module.h>
+ #include <linux/etherdevice.h>
+ #include <linux/random.h>
++#include <linux/compiler.h>
+ #include <net/mac80211.h>
+ #include <net/cfg80211.h>
+ #include "hw.h"
+@@ -1384,11 +1385,12 @@
+ 			       const struct ieee80211_tx_queue_params *param)
+ {
+ 	struct ar9170 *ar = hw->priv;
++	const u8 *elem;
+ 	int ret;
+ 
+ 	mutex_lock(&ar->mutex);
+-	if (queue < ar->hw->queues) {
+-		memcpy(&ar->edcf[ar9170_qmap[queue]], param, sizeof(*param));
++	if ((elem = nospec_array_ptr(ar9170_qmap, queue, ar->hw->queues))) {
++		memcpy(&ar->edcf[*elem], param, sizeof(*param));
+ 		ret = carl9170_set_qos(ar);
+ 	} else {
+ 		ret = -EINVAL;
+diff -urN linux-4.14-01/drivers/net/wireless/intersil/p54/main.c linux-4.14-02/drivers/net/wireless/intersil/p54/main.c
+--- linux-4.14-01/drivers/net/wireless/intersil/p54/main.c	2018-01-29 14:51:28.782061536 +0000
++++ linux-4.14-02/drivers/net/wireless/intersil/p54/main.c	2018-01-29 14:51:49.958155315 +0000
+@@ -20,6 +20,7 @@
+ #include <linux/firmware.h>
+ #include <linux/etherdevice.h>
+ #include <linux/module.h>
++#include <linux/compiler.h>
+ 
+ #include <net/mac80211.h>
+ 
+@@ -411,12 +412,13 @@
+ 		       const struct ieee80211_tx_queue_params *params)
+ {
+ 	struct p54_common *priv = dev->priv;
++	struct p54_edcf_queue_param *p54_q;
+ 	int ret;
+ 
+ 	mutex_lock(&priv->conf_mutex);
+-	if (queue < dev->queues) {
+-		P54_SET_QUEUE(priv->qos_params[queue], params->aifs,
+-			params->cw_min, params->cw_max, params->txop);
++	if ((p54_q = nospec_array_ptr(priv->qos_params, queue, dev->queues))) {
++		P54_SET_QUEUE(p54_q[0], params->aifs, params->cw_min,
++				params->cw_max, params->txop);
+ 		ret = p54_set_edcf(priv);
+ 	} else
+ 		ret = -EINVAL;
+diff -urN linux-4.14-01/drivers/net/wireless/st/cw1200/sta.c linux-4.14-02/drivers/net/wireless/st/cw1200/sta.c
+--- linux-4.14-01/drivers/net/wireless/st/cw1200/sta.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/net/wireless/st/cw1200/sta.c	2018-01-29 14:51:49.960155324 +0000
+@@ -14,6 +14,7 @@
+ #include <linux/firmware.h>
+ #include <linux/module.h>
+ #include <linux/etherdevice.h>
++#include <linux/compiler.h>
+ 
+ #include "cw1200.h"
+ #include "sta.h"
+@@ -612,18 +613,19 @@
+ 		   u16 queue, const struct ieee80211_tx_queue_params *params)
+ {
+ 	struct cw1200_common *priv = dev->priv;
++	struct wsm_set_tx_queue_params *txq_params;
+ 	int ret = 0;
+ 	/* To prevent re-applying PM request OID again and again*/
+ 	bool old_uapsd_flags;
+ 
+ 	mutex_lock(&priv->conf_mutex);
+ 
+-	if (queue < dev->queues) {
++	if ((txq_params = nospec_array_ptr(priv->tx_queue_params.params,
++					queue, dev->queues))) {
+ 		old_uapsd_flags = le16_to_cpu(priv->uapsd_info.uapsd_flags);
+ 
+-		WSM_TX_QUEUE_SET(&priv->tx_queue_params, queue, 0, 0, 0);
+-		ret = wsm_set_tx_queue_params(priv,
+-					      &priv->tx_queue_params.params[queue], queue);
++		WSM_TX_QUEUE_SET(txq_params, 0, 0, 0);
++		ret = wsm_set_tx_queue_params(priv, txq_params, queue);
+ 		if (ret) {
+ 			ret = -EINVAL;
+ 			goto out;
+diff -urN linux-4.14-01/drivers/net/wireless/st/cw1200/wsm.h linux-4.14-02/drivers/net/wireless/st/cw1200/wsm.h
+--- linux-4.14-01/drivers/net/wireless/st/cw1200/wsm.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/net/wireless/st/cw1200/wsm.h	2018-01-29 14:51:49.960155324 +0000
+@@ -1099,10 +1099,8 @@
+ };
+ 
+ 
+-#define WSM_TX_QUEUE_SET(queue_params, queue, ack_policy, allowed_time,\
+-		max_life_time)	\
++#define WSM_TX_QUEUE_SET(p, ack_policy, allowed_time, max_life_time)	\
+ do {							\
+-	struct wsm_set_tx_queue_params *p = &(queue_params)->params[queue]; \
+ 	p->ackPolicy = (ack_policy);				\
+ 	p->allowedMediumTime = (allowed_time);				\
+ 	p->maxTransmitLifetime = (max_life_time);			\
+diff -urN linux-4.14-01/drivers/pci/pci-sysfs.c linux-4.14-02/drivers/pci/pci-sysfs.c
+--- linux-4.14-01/drivers/pci/pci-sysfs.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/pci/pci-sysfs.c	2018-01-29 14:51:49.833154729 +0000
+@@ -889,6 +889,9 @@
+ 	loff_t init_off = off;
+ 	u8 *data = (u8 *) buf;
+ 
++	if (kernel_is_locked_down("Direct PCI access"))
++		return -EPERM;
++
+ 	if (off > dev->cfg_size)
+ 		return 0;
+ 	if (off + count > dev->cfg_size) {
+@@ -1183,6 +1186,9 @@
+ 	enum pci_mmap_state mmap_type;
+ 	struct resource *res = &pdev->resource[bar];
+ 
++	if (kernel_is_locked_down("Direct PCI access"))
++		return -EPERM;
++
+ 	if (res->flags & IORESOURCE_MEM && iomem_is_exclusive(res->start))
+ 		return -EINVAL;
+ 
+@@ -1263,6 +1269,9 @@
+ 				     struct bin_attribute *attr, char *buf,
+ 				     loff_t off, size_t count)
+ {
++	if (kernel_is_locked_down("Direct PCI access"))
++		return -EPERM;
++
+ 	return pci_resource_io(filp, kobj, attr, buf, off, count, true);
+ }
+ 
+diff -urN linux-4.14-01/drivers/pci/proc.c linux-4.14-02/drivers/pci/proc.c
+--- linux-4.14-01/drivers/pci/proc.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/pci/proc.c	2018-01-29 14:51:49.834154733 +0000
+@@ -117,6 +117,9 @@
+ 	int size = dev->cfg_size;
+ 	int cnt;
+ 
++	if (kernel_is_locked_down("Direct PCI access"))
++		return -EPERM;
++
+ 	if (pos >= size)
+ 		return 0;
+ 	if (nbytes >= size)
+@@ -196,6 +199,9 @@
+ #endif /* HAVE_PCI_MMAP */
+ 	int ret = 0;
+ 
++	if (kernel_is_locked_down("Direct PCI access"))
++		return -EPERM;
++
+ 	switch (cmd) {
+ 	case PCIIOC_CONTROLLER:
+ 		ret = pci_domain_nr(dev->bus);
+@@ -237,7 +243,8 @@
+ 	struct pci_filp_private *fpriv = file->private_data;
+ 	int i, ret, write_combine = 0, res_bit = IORESOURCE_MEM;
+ 
+-	if (!capable(CAP_SYS_RAWIO))
++	if (!capable(CAP_SYS_RAWIO) ||
++	    kernel_is_locked_down("Direct PCI access"))
+ 		return -EPERM;
+ 
+ 	if (fpriv->mmap_state == pci_mmap_io) {
+diff -urN linux-4.14-01/drivers/pci/syscall.c linux-4.14-02/drivers/pci/syscall.c
+--- linux-4.14-01/drivers/pci/syscall.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/pci/syscall.c	2018-01-29 14:51:49.834154733 +0000
+@@ -93,7 +93,8 @@
+ 	u32 dword;
+ 	int err = 0;
+ 
+-	if (!capable(CAP_SYS_ADMIN))
++	if (!capable(CAP_SYS_ADMIN) ||
++	    kernel_is_locked_down("Direct PCI access"))
+ 		return -EPERM;
+ 
+ 	dev = pci_get_bus_and_slot(bus, dfn);
+diff -urN linux-4.14-01/drivers/pcmcia/cistpl.c linux-4.14-02/drivers/pcmcia/cistpl.c
+--- linux-4.14-01/drivers/pcmcia/cistpl.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/pcmcia/cistpl.c	2018-01-29 14:51:49.838154752 +0000
+@@ -1578,6 +1578,9 @@
+ 	struct pcmcia_socket *s;
+ 	int error;
+ 
++	if (kernel_is_locked_down("Direct PCMCIA CIS storage"))
++		return -EPERM;
++
+ 	s = to_socket(container_of(kobj, struct device, kobj));
+ 
+ 	if (off)
+diff -urN linux-4.14-01/drivers/platform/x86/asus-wmi.c linux-4.14-02/drivers/platform/x86/asus-wmi.c
+--- linux-4.14-01/drivers/platform/x86/asus-wmi.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/platform/x86/asus-wmi.c	2018-01-29 14:51:49.835154738 +0000
+@@ -1905,6 +1905,9 @@
+ 	int err;
+ 	u32 retval = -1;
+ 
++	if (kernel_is_locked_down("Asus WMI"))
++		return -EPERM;
++
+ 	err = asus_wmi_get_devstate(asus, asus->debug.dev_id, &retval);
+ 
+ 	if (err < 0)
+@@ -1921,6 +1924,9 @@
+ 	int err;
+ 	u32 retval = -1;
+ 
++	if (kernel_is_locked_down("Asus WMI"))
++		return -EPERM;
++
+ 	err = asus_wmi_set_devstate(asus->debug.dev_id, asus->debug.ctrl_param,
+ 				    &retval);
+ 
+@@ -1945,6 +1951,9 @@
+ 	union acpi_object *obj;
+ 	acpi_status status;
+ 
++	if (kernel_is_locked_down("Asus WMI"))
++		return -EPERM;
++
+ 	status = wmi_evaluate_method(ASUS_WMI_MGMT_GUID,
+ 				     0, asus->debug.method_id,
+ 				     &input, &output);
+diff -urN linux-4.14-01/drivers/platform/x86/dell-laptop.c linux-4.14-02/drivers/platform/x86/dell-laptop.c
+--- linux-4.14-01/drivers/platform/x86/dell-laptop.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/platform/x86/dell-laptop.c	2018-01-29 14:51:50.061155798 +0000
+@@ -1163,6 +1163,7 @@
+ 
+ static bool kbd_led_present;
+ static DEFINE_MUTEX(kbd_led_mutex);
++static enum led_brightness kbd_led_level;
+ 
+ /*
+  * NOTE: there are three ways to set the keyboard backlight level.
+@@ -2003,6 +2004,7 @@
+ static int kbd_led_level_set(struct led_classdev *led_cdev,
+ 			     enum led_brightness value)
+ {
++	enum led_brightness new_value = value;
+ 	struct kbd_state state;
+ 	struct kbd_state new_state;
+ 	u16 num;
+@@ -2032,6 +2034,9 @@
+ 	}
+ 
+ out:
++	if (ret == 0)
++		kbd_led_level = new_value;
++
+ 	mutex_unlock(&kbd_led_mutex);
+ 	return ret;
+ }
+@@ -2059,6 +2064,9 @@
+ 		if (kbd_led.max_brightness)
+ 			kbd_led.max_brightness--;
+ 	}
++
++	kbd_led_level = kbd_led_level_get(NULL);
++
+ 	ret = led_classdev_register(dev, &kbd_led);
+ 	if (ret)
+ 		kbd_led_present = false;
+@@ -2083,13 +2091,25 @@
+ static int dell_laptop_notifier_call(struct notifier_block *nb,
+ 				     unsigned long action, void *data)
+ {
++	bool changed = false;
++	enum led_brightness new_kbd_led_level;
++
+ 	switch (action) {
+ 	case DELL_LAPTOP_KBD_BACKLIGHT_BRIGHTNESS_CHANGED:
+ 		if (!kbd_led_present)
+ 			break;
+ 
+-		led_classdev_notify_brightness_hw_changed(&kbd_led,
+-						kbd_led_level_get(&kbd_led));
++		mutex_lock(&kbd_led_mutex);
++		new_kbd_led_level = kbd_led_level_get(&kbd_led);
++		if (kbd_led_level != new_kbd_led_level) {
++			kbd_led_level = new_kbd_led_level;
++			changed = true;
++		}
++		mutex_unlock(&kbd_led_mutex);
++
++		if (changed)
++			led_classdev_notify_brightness_hw_changed(&kbd_led,
++								kbd_led_level);
+ 		break;
+ 	}
+ 
+diff -urN linux-4.14-01/drivers/scsi/eata.c linux-4.14-02/drivers/scsi/eata.c
+--- linux-4.14-01/drivers/scsi/eata.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/scsi/eata.c	2018-01-29 14:51:49.837154747 +0000
+@@ -1552,8 +1552,11 @@
+ 
+ 	tpnt->proc_name = "eata2x";
+ 
+-	if (strlen(boot_options))
++	if (strlen(boot_options)) {
++		if (kernel_is_locked_down("Command line-specified device addresses, irqs and dma channels"))
++			return -EPERM;
+ 		option_setup(boot_options);
++	}
+ 
+ #if defined(MODULE)
+ 	/* io_port could have been modified when loading as a module */
+diff -urN linux-4.14-01/drivers/scsi/qla2xxx/qla_mr.c linux-4.14-02/drivers/scsi/qla2xxx/qla_mr.c
+--- linux-4.14-01/drivers/scsi/qla2xxx/qla_mr.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/scsi/qla2xxx/qla_mr.c	2018-01-29 14:51:49.959155319 +0000
+@@ -9,6 +9,7 @@
+ #include <linux/ktime.h>
+ #include <linux/pci.h>
+ #include <linux/ratelimit.h>
++#include <linux/compiler.h>
+ #include <linux/vmalloc.h>
+ #include <linux/bsg-lib.h>
+ #include <scsi/scsi_tcq.h>
+@@ -2276,7 +2277,7 @@
+ static void
+ qlafx00_status_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, void *pkt)
+ {
+-	srb_t		*sp;
++	srb_t		*sp, **elem;
+ 	fc_port_t	*fcport;
+ 	struct scsi_cmnd *cp;
+ 	struct sts_entry_fx00 *sts;
+@@ -2305,8 +2306,9 @@
+ 	req = ha->req_q_map[que];
+ 
+ 	/* Validate handle. */
+-	if (handle < req->num_outstanding_cmds)
+-		sp = req->outstanding_cmds[handle];
++	if ((elem = nospec_array_ptr(req->outstanding_cmds, handle,
++					req->num_outstanding_cmds)))
++		sp = *elem;
+ 	else
+ 		sp = NULL;
+ 
+@@ -2627,7 +2629,7 @@
+ qlafx00_multistatus_entry(struct scsi_qla_host *vha,
+ 	struct rsp_que *rsp, void *pkt)
+ {
+-	srb_t		*sp;
++	srb_t		*sp, **elem;
+ 	struct multi_sts_entry_fx00 *stsmfx;
+ 	struct qla_hw_data *ha = vha->hw;
+ 	uint32_t handle, hindex, handle_count, i;
+@@ -2656,8 +2658,9 @@
+ 		req = ha->req_q_map[que];
+ 
+ 		/* Validate handle. */
+-		if (handle < req->num_outstanding_cmds)
+-			sp = req->outstanding_cmds[handle];
++		if ((elem = nospec_array_ptr(req->outstanding_cmds, handle,
++						req->num_outstanding_cmds)))
++			sp = *elem;
+ 		else
+ 			sp = NULL;
+ 
+diff -urN linux-4.14-01/drivers/scsi/sd.c linux-4.14-02/drivers/scsi/sd.c
+--- linux-4.14-01/drivers/scsi/sd.c	2018-01-29 14:51:28.800061616 +0000
++++ linux-4.14-02/drivers/scsi/sd.c	2018-01-29 14:51:49.792154536 +0000
+@@ -3069,7 +3069,7 @@
+ static int sd_revalidate_disk(struct gendisk *disk)
+ {
+ 	struct scsi_disk *sdkp = scsi_disk(disk);
+-	struct scsi_device *sdp = sdkp->device;
++	struct scsi_device *sdp;
+ 	struct request_queue *q = sdkp->disk->queue;
+ 	sector_t old_capacity = sdkp->capacity;
+ 	unsigned char *buffer;
+@@ -3078,6 +3078,11 @@
+ 	SCSI_LOG_HLQUEUE(3, sd_printk(KERN_INFO, sdkp,
+ 				      "sd_revalidate_disk\n"));
+ 
++	if (WARN_ONCE((!sdkp), "Invalid scsi_disk from %p\n", disk))
++		goto out;
++
++	sdp = sdkp->device;
++
+ 	/*
+ 	 * If the device is offline, don't try and read capacity or any
+ 	 * of the other niceties.
+diff -urN linux-4.14-01/drivers/thermal/int340x_thermal/int340x_thermal_zone.c linux-4.14-02/drivers/thermal/int340x_thermal/int340x_thermal_zone.c
+--- linux-4.14-01/drivers/thermal/int340x_thermal/int340x_thermal_zone.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/thermal/int340x_thermal/int340x_thermal_zone.c	2018-01-29 14:51:49.961155329 +0000
+@@ -17,6 +17,7 @@
+ #include <linux/init.h>
+ #include <linux/acpi.h>
+ #include <linux/thermal.h>
++#include <linux/compiler.h>
+ #include "int340x_thermal_zone.h"
+ 
+ static int int340x_thermal_get_zone_temp(struct thermal_zone_device *zone,
+@@ -52,20 +53,21 @@
+ 					 int trip, int *temp)
+ {
+ 	struct int34x_thermal_zone *d = zone->devdata;
++	unsigned long *elem;
+ 	int i;
+ 
+ 	if (d->override_ops && d->override_ops->get_trip_temp)
+ 		return d->override_ops->get_trip_temp(zone, trip, temp);
+ 
+-	if (trip < d->aux_trip_nr)
+-		*temp = d->aux_trips[trip];
+-	else if (trip == d->crt_trip_id)
++	if ((elem = nospec_array_ptr(d->aux_trips, trip, d->aux_trip_nr))) {
++		*temp = *elem;
++	} else if (trip == d->crt_trip_id) {
+ 		*temp = d->crt_temp;
+-	else if (trip == d->psv_trip_id)
++	} else if (trip == d->psv_trip_id) {
+ 		*temp = d->psv_temp;
+-	else if (trip == d->hot_trip_id)
++	} else if (trip == d->hot_trip_id) {
+ 		*temp = d->hot_temp;
+-	else {
++	} else {
+ 		for (i = 0; i < INT340X_THERMAL_MAX_ACT_TRIP_COUNT; i++) {
+ 			if (d->act_trips[i].valid &&
+ 			    d->act_trips[i].id == trip) {
+diff -urN linux-4.14-01/drivers/tty/serial/serial_core.c linux-4.14-02/drivers/tty/serial/serial_core.c
+--- linux-4.14-01/drivers/tty/serial/serial_core.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/tty/serial/serial_core.c	2018-01-29 14:51:49.838154752 +0000
+@@ -842,6 +842,12 @@
+ 	new_flags = (__force upf_t)new_info->flags;
+ 	old_custom_divisor = uport->custom_divisor;
+ 
++	if ((change_port || change_irq) &&
++	    kernel_is_locked_down("Using TIOCSSERIAL to change device addresses, irqs and dma channels")) {
++		retval = -EPERM;
++		goto exit;
++	}
++
+ 	if (!capable(CAP_SYS_ADMIN)) {
+ 		retval = -EPERM;
+ 		if (change_irq || change_port ||
+diff -urN linux-4.14-01/drivers/tty/sysrq.c linux-4.14-02/drivers/tty/sysrq.c
+--- linux-4.14-01/drivers/tty/sysrq.c	2018-01-29 14:51:28.807061647 +0000
++++ linux-4.14-02/drivers/tty/sysrq.c	2018-01-29 14:51:49.830154715 +0000
+@@ -487,6 +487,7 @@
+ 	/* x: May be registered on mips for TLB dump */
+ 	/* x: May be registered on ppc/powerpc for xmon */
+ 	/* x: May be registered on sparc64 for global PMU dump */
++	/* x: May be registered on x86_64 for disabling secure boot */
+ 	NULL,				/* x */
+ 	/* y: May be registered on sparc64 for global register dump */
+ 	NULL,				/* y */
+@@ -530,7 +531,7 @@
+                 sysrq_key_table[i] = op_p;
+ }
+ 
+-void __handle_sysrq(int key, bool check_mask)
++void __handle_sysrq(int key, unsigned int from)
+ {
+ 	struct sysrq_key_op *op_p;
+ 	int orig_log_level;
+@@ -550,11 +551,15 @@
+ 
+         op_p = __sysrq_get_key_op(key);
+         if (op_p) {
++		/* Ban synthetic events from some sysrq functionality */
++		if ((from == SYSRQ_FROM_PROC || from == SYSRQ_FROM_SYNTHETIC) &&
++		    op_p->enable_mask & SYSRQ_DISABLE_USERSPACE)
++			printk("This sysrq operation is disabled from userspace.\n");
+ 		/*
+ 		 * Should we check for enabled operations (/proc/sysrq-trigger
+ 		 * should not) and is the invoked operation enabled?
+ 		 */
+-		if (!check_mask || sysrq_on_mask(op_p->enable_mask)) {
++		if (from == SYSRQ_FROM_KERNEL || sysrq_on_mask(op_p->enable_mask)) {
+ 			pr_cont("%s\n", op_p->action_msg);
+ 			console_loglevel = orig_log_level;
+ 			op_p->handler(key);
+@@ -586,7 +591,7 @@
+ void handle_sysrq(int key)
+ {
+ 	if (sysrq_on())
+-		__handle_sysrq(key, true);
++		__handle_sysrq(key, SYSRQ_FROM_KERNEL);
+ }
+ EXPORT_SYMBOL(handle_sysrq);
+ 
+@@ -667,7 +672,7 @@
+ static void sysrq_handle_reset_request(struct sysrq_state *state)
+ {
+ 	if (state->reset_requested)
+-		__handle_sysrq(sysrq_xlate[KEY_B], false);
++		__handle_sysrq(sysrq_xlate[KEY_B], SYSRQ_FROM_KERNEL);
+ 
+ 	if (sysrq_reset_downtime_ms)
+ 		mod_timer(&state->keyreset_timer,
+@@ -818,8 +823,10 @@
+ 
+ 	default:
+ 		if (sysrq->active && value && value != 2) {
++			int from = sysrq->handle.dev->flags & INPUTDEV_FLAGS_SYNTHETIC ?
++					SYSRQ_FROM_SYNTHETIC : 0;
+ 			sysrq->need_reinject = false;
+-			__handle_sysrq(sysrq_xlate[code], true);
++			__handle_sysrq(sysrq_xlate[code], from);
+ 		}
+ 		break;
+ 	}
+@@ -1103,7 +1110,7 @@
+ 
+ 		if (get_user(c, buf))
+ 			return -EFAULT;
+-		__handle_sysrq(c, false);
++		__handle_sysrq(c, SYSRQ_FROM_PROC);
+ 	}
+ 
+ 	return count;
+diff -urN linux-4.14-01/drivers/video/fbdev/core/fbcon.c linux-4.14-02/drivers/video/fbdev/core/fbcon.c
+--- linux-4.14-01/drivers/video/fbdev/core/fbcon.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/video/fbdev/core/fbcon.c	2018-01-29 14:51:49.762154396 +0000
+@@ -638,13 +638,15 @@
+ 		kfree(save);
+ 	}
+ 
+-	if (logo_lines > vc->vc_bottom) {
+-		logo_shown = FBCON_LOGO_CANSHOW;
+-		printk(KERN_INFO
+-		       "fbcon_init: disable boot-logo (boot-logo bigger than screen).\n");
+-	} else if (logo_shown != FBCON_LOGO_DONTSHOW) {
+-		logo_shown = FBCON_LOGO_DRAW;
+-		vc->vc_top = logo_lines;
++	if (logo_shown != FBCON_LOGO_DONTSHOW) {
++		if (logo_lines > vc->vc_bottom) {
++			logo_shown = FBCON_LOGO_CANSHOW;
++			printk(KERN_INFO
++			       "fbcon_init: disable boot-logo (boot-logo bigger than screen).\n");
++		} else {
++			logo_shown = FBCON_LOGO_DRAW;
++			vc->vc_top = logo_lines;
++		}
+ 	}
+ }
+ #endif /* MODULE */
+@@ -3669,4 +3671,15 @@
+ 	do_unregister_con_driver(&fb_con);
+ 	console_unlock();
+ }	
++
++#else
++
++static int __init quiet_logo(char *str)
++{
++	logo_shown = FBCON_LOGO_DONTSHOW;
++	return 0;
++}
++
++early_param("quiet", quiet_logo);
++
+ #endif
+diff -urN linux-4.14-01/drivers/xen/xen-pciback/pciback_ops.c linux-4.14-02/drivers/xen/xen-pciback/pciback_ops.c
+--- linux-4.14-01/drivers/xen/xen-pciback/pciback_ops.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/drivers/xen/xen-pciback/pciback_ops.c	2018-01-29 14:51:49.812154630 +0000
+@@ -127,8 +127,6 @@
+ 		if (pci_is_enabled(dev))
+ 			pci_disable_device(dev);
+ 
+-		pci_write_config_word(dev, PCI_COMMAND, 0);
+-
+ 		dev->is_busmaster = 0;
+ 	} else {
+ 		pci_read_config_word(dev, PCI_COMMAND, &cmd);
+diff -urN linux-4.14-01/fs/debugfs/file.c linux-4.14-02/fs/debugfs/file.c
+--- linux-4.14-01/fs/debugfs/file.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/fs/debugfs/file.c	2018-01-29 14:51:49.839154757 +0000
+@@ -103,6 +103,9 @@
+ 	const struct file_operations *real_fops = NULL;
+ 	int srcu_idx, r;
+ 
++	if (kernel_is_locked_down("debugfs"))
++		return -EPERM;
++
+ 	r = debugfs_use_file_start(dentry, &srcu_idx);
+ 	if (r) {
+ 		r = -ENOENT;
+@@ -232,6 +235,9 @@
+ 	struct file_operations *proxy_fops = NULL;
+ 	int srcu_idx, r;
+ 
++	if (kernel_is_locked_down("debugfs"))
++		return -EPERM;
++
+ 	r = debugfs_use_file_start(dentry, &srcu_idx);
+ 	if (r) {
+ 		r = -ENOENT;
+diff -urN linux-4.14-01/fs/proc/kcore.c linux-4.14-02/fs/proc/kcore.c
+--- linux-4.14-01/fs/proc/kcore.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/fs/proc/kcore.c	2018-01-29 14:51:49.840154761 +0000
+@@ -550,6 +550,8 @@
+ 
+ static int open_kcore(struct inode *inode, struct file *filp)
+ {
++	if (kernel_is_locked_down("/proc/kcore"))
++		return -EPERM;
+ 	if (!capable(CAP_SYS_RAWIO))
+ 		return -EPERM;
+ 
+diff -urN linux-4.14-01/fs/udf/misc.c linux-4.14-02/fs/udf/misc.c
+--- linux-4.14-01/fs/udf/misc.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/fs/udf/misc.c	2018-01-29 14:51:49.962155333 +0000
+@@ -51,6 +51,8 @@
+ 	int offset;
+ 	uint16_t crclen;
+ 	struct udf_inode_info *iinfo = UDF_I(inode);
++	uint8_t *ea_dst, *ea_src;
++	uint32_t aal, ial;
+ 
+ 	ea = iinfo->i_ext.i_data;
+ 	if (iinfo->i_lenEAttr) {
+@@ -100,33 +102,34 @@
+ 
+ 		offset = iinfo->i_lenEAttr;
+ 		if (type < 2048) {
+-			if (le32_to_cpu(eahd->appAttrLocation) <
+-					iinfo->i_lenEAttr) {
+-				uint32_t aal =
+-					le32_to_cpu(eahd->appAttrLocation);
+-				memmove(&ea[offset - aal + size],
+-					&ea[aal], offset - aal);
++			aal = le32_to_cpu(eahd->appAttrLocation);
++			if ((ea_dst = nospec_array_ptr(ea, offset - aal + size,
++						       iinfo->i_lenEAttr)) &&
++			    (ea_src = nospec_array_ptr(ea, aal,
++						       iinfo->i_lenEAttr))) {
++				memmove(ea_dst, ea_src, offset - aal);
+ 				offset -= aal;
+ 				eahd->appAttrLocation =
+ 						cpu_to_le32(aal + size);
+ 			}
+-			if (le32_to_cpu(eahd->impAttrLocation) <
+-					iinfo->i_lenEAttr) {
+-				uint32_t ial =
+-					le32_to_cpu(eahd->impAttrLocation);
+-				memmove(&ea[offset - ial + size],
+-					&ea[ial], offset - ial);
++
++			ial = le32_to_cpu(eahd->impAttrLocation);
++			if ((ea_dst = nospec_array_ptr(ea, offset - ial + size,
++						       iinfo->i_lenEAttr)) &&
++			    (ea_src = nospec_array_ptr(ea, ial,
++						       iinfo->i_lenEAttr))) {
++				memmove(ea_dst, ea_src, offset - ial);
+ 				offset -= ial;
+ 				eahd->impAttrLocation =
+ 						cpu_to_le32(ial + size);
+ 			}
+ 		} else if (type < 65536) {
+-			if (le32_to_cpu(eahd->appAttrLocation) <
+-					iinfo->i_lenEAttr) {
+-				uint32_t aal =
+-					le32_to_cpu(eahd->appAttrLocation);
+-				memmove(&ea[offset - aal + size],
+-					&ea[aal], offset - aal);
++			aal = le32_to_cpu(eahd->appAttrLocation);
++			if ((ea_dst = nospec_array_ptr(ea, offset - aal + size,
++						       iinfo->i_lenEAttr)) &&
++			    (ea_src = nospec_array_ptr(ea, aal,
++						       iinfo->i_lenEAttr))) {
++				memmove(ea_dst, ea_src, offset - aal);
+ 				offset -= aal;
+ 				eahd->appAttrLocation =
+ 						cpu_to_le32(aal + size);
+diff -urN linux-4.14-01/include/asm-generic/barrier.h linux-4.14-02/include/asm-generic/barrier.h
+--- linux-4.14-01/include/asm-generic/barrier.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/asm-generic/barrier.h	2018-01-29 14:51:49.957155310 +0000
+@@ -54,6 +54,74 @@
+ #define read_barrier_depends()		do { } while (0)
+ #endif
+ 
++/*
++ * Inhibit subsequent speculative memory accesses.
++ *
++ * Architectures with a suitable memory barrier should provide an
++ * implementation. This is non-portable, and generic code should use
++ * nospec_{array_ptr,ptr}. Arch-specific code should define and use
++ * nospec_barrier() for usages where nospec_{array_ptr,ptr} is
++ * unsuitable.
++ */
++#ifndef __nospec_barrier
++#define __nospec_barrier()		do { } while (0)
++#endif
++
++/**
++ * nospec_ptr() - Ensure a  pointer is bounded, even under speculation.
++ *
++ * @ptr: the pointer to test
++ * @lo: the lower valid bound for @ptr, inclusive
++ * @hi: the upper valid bound for @ptr, exclusive
++ *
++ * If @ptr falls in the interval [@lo, @i), returns @ptr, otherwise returns
++ * NULL.
++ *
++ * Architectures which do not provide __nospec_barrier() should override this
++ * to ensure that ptr falls in the [lo, hi) interval both under architectural
++ * execution and under speculation, preventing propagation of an out-of-bounds
++ * pointer to code which is speculatively executed.
++ */
++#ifndef nospec_ptr
++#define nospec_ptr(ptr, lo, hi)						\
++({									\
++	typeof (ptr) __ret;						\
++	typeof (ptr) __ptr = (ptr);					\
++	typeof (ptr) __lo = (lo);					\
++	typeof (ptr) __hi = (hi);					\
++									\
++	__ret = (__lo <= __ptr && __ptr < __hi) ? __ptr : NULL;		\
++									\
++	__nospec_barrier();						\
++									\
++	__ret;								\
++})
++#endif
++
++/**
++ * nospec_array_ptr - Generate a pointer to an array element, ensuring the
++ * pointer is bounded under speculation.
++ *
++ * @arr: the base of the array
++ * @idx: the index of the element
++ * @sz: the number of elements in the array
++ *
++ * If @idx falls in the interval [0, @sz), returns the pointer to @arr[@idx],
++ * otherwise returns NULL.
++ *
++ * This is a wrapper around nospec_ptr(), provided for convenience.
++ * Architectures should implement nospec_ptr() to ensure this is the case
++ * under speculation.
++ */
++#define nospec_array_ptr(arr, idx, sz)					\
++({									\
++	typeof(*(arr)) *__arr = (arr);					\
++	typeof(idx) __idx = (idx);					\
++	typeof(sz) __sz = (sz);						\
++									\
++	nospec_ptr(__arr + __idx, __arr, __arr + __sz);			\
++})
++
+ #ifndef __smp_mb
+ #define __smp_mb()	mb()
+ #endif
+diff -urN linux-4.14-01/include/asm-generic/crash-driver.h linux-4.14-02/include/asm-generic/crash-driver.h
+--- linux-4.14-01/include/asm-generic/crash-driver.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/include/asm-generic/crash-driver.h	2018-01-29 14:51:49.776154461 +0000
+@@ -0,0 +1,72 @@
++#ifndef __CRASH_H__
++#define __CRASH_H__
++
++/*
++ * include/linux/crash-driver.h
++ *
++ * Copyright (c) 2013 Red Hat, Inc. All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2, or (at your option)
++ * any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ *
++ */
++
++#ifdef __KERNEL__
++
++#include <linux/mm.h>
++#include <linux/highmem.h>
++
++static inline void *
++map_virtual(u64 offset, struct page **pp)
++{
++	struct page *page;
++	unsigned long pfn;
++	void *vaddr;
++
++	pfn = (unsigned long)(offset >> PAGE_SHIFT);
++
++	if (!page_is_ram(pfn)) {
++		printk(KERN_INFO
++		    "crash memory driver: !page_is_ram(pfn: %lx)\n", pfn);
++		return NULL;
++	}
++
++	if (!pfn_valid(pfn)) {
++		printk(KERN_INFO
++		    "crash memory driver: invalid pfn: %lx )\n", pfn);
++		return NULL;
++	}
++
++	page = pfn_to_page(pfn);
++
++	vaddr = kmap(page);
++	if (!vaddr) {
++		printk(KERN_INFO
++		    "crash memory driver: pfn: %lx kmap(page: %lx) failed\n",
++			pfn, (unsigned long)page);
++		return NULL;
++	}
++
++	*pp = page;
++	return (vaddr + (offset & (PAGE_SIZE-1)));
++}
++
++static inline void unmap_virtual(struct page *page)
++{
++	kunmap(page);
++}
++
++#endif /* __KERNEL__ */
++
++#endif /* __CRASH_H__ */
+diff -urN linux-4.14-01/include/linux/efi.h linux-4.14-02/include/linux/efi.h
+--- linux-4.14-01/include/linux/efi.h	2018-01-29 14:51:28.830061748 +0000
++++ linux-4.14-02/include/linux/efi.h	2018-01-29 14:51:49.892155005 +0000
+@@ -42,6 +42,8 @@
+ #define EFI_ABORTED		(21 | (1UL << (BITS_PER_LONG-1)))
+ #define EFI_SECURITY_VIOLATION	(26 | (1UL << (BITS_PER_LONG-1)))
+ 
++#define EFI_IS_ERROR(x)		((x) & (1UL << (BITS_PER_LONG-1)))
++
+ typedef unsigned long efi_status_t;
+ typedef u8 efi_bool_t;
+ typedef u16 efi_char16_t;		/* UNICODE character */
+@@ -629,6 +631,10 @@
+ #define EFI_IMAGE_SECURITY_DATABASE_GUID	EFI_GUID(0xd719b2cb, 0x3d3a, 0x4596,  0xa3, 0xbc, 0xda, 0xd0, 0x0e, 0x67, 0x65, 0x6f)
+ #define EFI_SHIM_LOCK_GUID			EFI_GUID(0x605dab50, 0xe046, 0x4300,  0xab, 0xb6, 0x3d, 0xd8, 0x10, 0xdd, 0x8b, 0x23)
+ 
++#define EFI_CERT_SHA256_GUID			EFI_GUID(0xc1c41626, 0x504c, 0x4092, 0xac, 0xa9, 0x41, 0xf9, 0x36, 0x93, 0x43, 0x28)
++#define EFI_CERT_X509_GUID			EFI_GUID(0xa5c059a1, 0x94e4, 0x4aa7, 0x87, 0xb5, 0xab, 0x15, 0x5c, 0x2b, 0xf0, 0x72)
++#define EFI_CERT_X509_SHA256_GUID		EFI_GUID(0x3bd2a492, 0x96c0, 0x4079, 0xb4, 0x20, 0xfc, 0xf9, 0x8e, 0xf1, 0x03, 0xed)
++
+ /*
+  * This GUID is used to pass to the kernel proper the struct screen_info
+  * structure that was populated by the stub based on the GOP protocol instance
+@@ -888,6 +894,27 @@
+ 	efi_memory_desc_t entry[0];
+ } efi_memory_attributes_table_t;
+ 
++typedef struct  {
++	efi_guid_t signature_owner;
++	u8 signature_data[];
++} efi_signature_data_t;
++
++typedef struct {
++	efi_guid_t signature_type;
++	u32 signature_list_size;
++	u32 signature_header_size;
++	u32 signature_size;
++	u8 signature_header[];
++	/* efi_signature_data_t signatures[][] */
++} efi_signature_list_t;
++
++typedef u8 efi_sha256_hash_t[32];
++
++typedef struct {
++	efi_sha256_hash_t to_be_signed_hash;
++	efi_time_t time_of_revocation;
++} efi_cert_x509_sha256_t;
++
+ /*
+  * All runtime access to EFI goes through this structure:
+  */
+@@ -1067,6 +1094,15 @@
+ char * __init efi_md_typeattr_format(char *buf, size_t size,
+ 				     const efi_memory_desc_t *md);
+ 
++
++typedef void (*efi_element_handler_t)(const char *source,
++				      const void *element_data,
++				      size_t element_size);
++extern int __init parse_efi_signature_list(
++	const char *source,
++	const void *data, size_t size,
++	efi_element_handler_t (*get_handler_for_guid)(const efi_guid_t *));
++
+ /**
+  * efi_range_is_wc - check the WC bit on an address range
+  * @start: starting kvirt address
+@@ -1106,6 +1142,14 @@
+ #define EFI_DBG			8	/* Print additional debug info at runtime */
+ #define EFI_NX_PE_DATA		9	/* Can runtime data regions be mapped non-executable? */
+ #define EFI_MEM_ATTR		10	/* Did firmware publish an EFI_MEMORY_ATTRIBUTES table? */
++#define EFI_SECURE_BOOT		11	/* Are we in Secure Boot mode? */
++
++enum efi_secureboot_mode {
++	efi_secureboot_mode_unset,
++	efi_secureboot_mode_unknown,
++	efi_secureboot_mode_disabled,
++	efi_secureboot_mode_enabled,
++};
+ 
+ #ifdef CONFIG_EFI
+ /*
+@@ -1118,6 +1162,7 @@
+ extern void efi_reboot(enum reboot_mode reboot_mode, const char *__unused);
+ 
+ extern bool efi_is_table_address(unsigned long phys_addr);
++extern void __init efi_set_secure_boot(enum efi_secureboot_mode mode);
+ #else
+ static inline bool efi_enabled(int feature)
+ {
+@@ -1136,9 +1181,11 @@
+ {
+ 	return false;
+ }
++static inline void efi_set_secure_boot(enum efi_secureboot_mode mode) {}
+ #endif
+ 
+ extern int efi_status_to_err(efi_status_t status);
++extern const char *efi_status_to_str(efi_status_t status);
+ 
+ /*
+  * Variable Attributes
+@@ -1521,12 +1568,6 @@
+ bool efi_runtime_disabled(void);
+ extern void efi_call_virt_check_flags(unsigned long flags, const char *call);
+ 
+-enum efi_secureboot_mode {
+-	efi_secureboot_mode_unset,
+-	efi_secureboot_mode_unknown,
+-	efi_secureboot_mode_disabled,
+-	efi_secureboot_mode_enabled,
+-};
+ enum efi_secureboot_mode efi_get_secureboot(efi_system_table_t *sys_table);
+ 
+ #ifdef CONFIG_RESET_ATTACK_MITIGATION
+diff -urN linux-4.14-01/include/linux/fdtable.h linux-4.14-02/include/linux/fdtable.h
+--- linux-4.14-01/include/linux/fdtable.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/fdtable.h	2018-01-29 14:51:49.961155329 +0000
+@@ -81,9 +81,10 @@
+ static inline struct file *__fcheck_files(struct files_struct *files, unsigned int fd)
+ {
+ 	struct fdtable *fdt = rcu_dereference_raw(files->fdt);
++	struct file __rcu **fdp;
+ 
+-	if (fd < fdt->max_fds)
+-		return rcu_dereference_raw(fdt->fd[fd]);
++	if ((fdp = nospec_array_ptr(fdt->fd, fd, fdt->max_fds)))
++		return rcu_dereference_raw(*fdp);
+ 	return NULL;
+ }
+ 
+diff -urN linux-4.14-01/include/linux/gpio_keys.h linux-4.14-02/include/linux/gpio_keys.h
+--- linux-4.14-01/include/linux/gpio_keys.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/gpio_keys.h	2018-01-29 14:51:49.977155404 +0000
+@@ -16,6 +16,8 @@
+  * @debounce_interval:	debounce ticks interval in msecs
+  * @can_disable:	%true indicates that userspace is allowed to
+  *			disable button via sysfs
++ * @no_wakeup_events:	For wake-up source buttons only, if %true then no input
++ *			events will be generated if pressed while suspended
+  * @value:		axis value for %EV_ABS
+  * @irq:		Irq number in case of interrupt keys
+  */
+@@ -28,6 +30,7 @@
+ 	int wakeup;
+ 	int debounce_interval;
+ 	bool can_disable;
++	bool no_wakeup_events;
+ 	int value;
+ 	unsigned int irq;
+ };
+diff -urN linux-4.14-01/include/linux/input.h linux-4.14-02/include/linux/input.h
+--- linux-4.14-01/include/linux/input.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/input.h	2018-01-29 14:51:49.830154715 +0000
+@@ -42,6 +42,7 @@
+  * @phys: physical path to the device in the system hierarchy
+  * @uniq: unique identification code for the device (if device has it)
+  * @id: id of the device (struct input_id)
++ * @flags: input device flags (SYNTHETIC, etc.)
+  * @propbit: bitmap of device properties and quirks
+  * @evbit: bitmap of types of events supported by the device (EV_KEY,
+  *	EV_REL, etc.)
+@@ -124,6 +125,8 @@
+ 	const char *uniq;
+ 	struct input_id id;
+ 
++	unsigned int flags;
++
+ 	unsigned long propbit[BITS_TO_LONGS(INPUT_PROP_CNT)];
+ 
+ 	unsigned long evbit[BITS_TO_LONGS(EV_CNT)];
+@@ -190,6 +193,8 @@
+ };
+ #define to_input_dev(d) container_of(d, struct input_dev, dev)
+ 
++#define	INPUTDEV_FLAGS_SYNTHETIC	0x000000001
++
+ /*
+  * Verify that we are in sync with input_device_id mod_devicetable.h #defines
+  */
+diff -urN linux-4.14-01/include/linux/kernel.h linux-4.14-02/include/linux/kernel.h
+--- linux-4.14-01/include/linux/kernel.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/kernel.h	2018-01-29 14:51:49.828154705 +0000
+@@ -306,6 +306,23 @@
+ { }
+ #endif
+ 
++#ifdef CONFIG_LOCK_DOWN_KERNEL
++extern bool __kernel_is_locked_down(const char *what, bool first);
++#else
++static inline bool __kernel_is_locked_down(const char *what, bool first)
++{
++	return false;
++}
++#endif
++
++#define kernel_is_locked_down(what)					\
++	({								\
++		static bool message_given;				\
++		bool locked_down = __kernel_is_locked_down(what, !message_given); \
++		message_given = true;					\
++		locked_down;						\
++	})
++
+ /* Internal, do not use. */
+ int __must_check _kstrtoul(const char *s, unsigned int base, unsigned long *res);
+ int __must_check _kstrtol(const char *s, unsigned int base, long *res);
+diff -urN linux-4.14-01/include/linux/rmi.h linux-4.14-02/include/linux/rmi.h
+--- linux-4.14-01/include/linux/rmi.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/rmi.h	2018-01-29 14:51:50.015155582 +0000
+@@ -364,6 +364,7 @@
+ 
+ 	struct rmi4_attn_data attn_data;
+ 	DECLARE_KFIFO(attn_fifo, struct rmi4_attn_data, 16);
++	struct work_struct attn_work;
+ };
+ 
+ int rmi_register_transport_device(struct rmi_transport_dev *xport);
+diff -urN linux-4.14-01/include/linux/security.h linux-4.14-02/include/linux/security.h
+--- linux-4.14-01/include/linux/security.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/security.h	2018-01-29 14:51:49.828154705 +0000
+@@ -1753,5 +1753,13 @@
+ { }
+ #endif /* CONFIG_SECURITY */
+ 
++#ifdef CONFIG_LOCK_DOWN_KERNEL
++extern void __init init_lockdown(void);
++#else
++static inline void __init init_lockdown(void)
++{
++}
++#endif
++
+ #endif /* ! __LINUX_SECURITY_H */
+ 
+diff -urN linux-4.14-01/include/linux/sysrq.h linux-4.14-02/include/linux/sysrq.h
+--- linux-4.14-01/include/linux/sysrq.h	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/include/linux/sysrq.h	2018-01-29 14:51:49.830154715 +0000
+@@ -29,6 +29,8 @@
+ #define SYSRQ_ENABLE_BOOT	0x0080
+ #define SYSRQ_ENABLE_RTNICE	0x0100
+ 
++#define SYSRQ_DISABLE_USERSPACE	0x00010000
++
+ struct sysrq_key_op {
+ 	void (*handler)(int);
+ 	char *help_msg;
+@@ -43,8 +45,12 @@
+  * are available -- else NULL's).
+  */
+ 
++#define SYSRQ_FROM_KERNEL	0x0001
++#define SYSRQ_FROM_PROC		0x0002
++#define SYSRQ_FROM_SYNTHETIC	0x0004
++
+ void handle_sysrq(int key);
+-void __handle_sysrq(int key, bool check_mask);
++void __handle_sysrq(int key, unsigned int from);
+ int register_sysrq_key(int key, struct sysrq_key_op *op);
+ int unregister_sysrq_key(int key, struct sysrq_key_op *op);
+ struct sysrq_key_op *__sysrq_get_key_op(int key);
+diff -urN linux-4.14-01/include/linux/vermagic.h linux-4.14-02/include/linux/vermagic.h
+--- linux-4.14-01/include/linux/vermagic.h	2018-01-29 14:51:28.834061766 +0000
++++ linux-4.14-02/include/linux/vermagic.h	2018-01-29 14:51:49.969155366 +0000
+@@ -31,17 +31,11 @@
+ #else
+ #define MODULE_RANDSTRUCT_PLUGIN
+ #endif
+-#ifdef RETPOLINE
+-#define MODULE_VERMAGIC_RETPOLINE "retpoline "
+-#else
+-#define MODULE_VERMAGIC_RETPOLINE ""
+-#endif
+ 
+ #define VERMAGIC_STRING 						\
+ 	UTS_RELEASE " "							\
+ 	MODULE_VERMAGIC_SMP MODULE_VERMAGIC_PREEMPT 			\
+ 	MODULE_VERMAGIC_MODULE_UNLOAD MODULE_VERMAGIC_MODVERSIONS	\
+ 	MODULE_ARCH_VERMAGIC						\
+-	MODULE_RANDSTRUCT_PLUGIN					\
+-	MODULE_VERMAGIC_RETPOLINE
++	MODULE_RANDSTRUCT_PLUGIN
+ 
+diff -urN linux-4.14-01/init/Kconfig linux-4.14-02/init/Kconfig
+--- linux-4.14-01/init/Kconfig	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/init/Kconfig	2018-01-29 14:51:49.797154560 +0000
+@@ -877,7 +877,7 @@
+ endif # CGROUPS
+ 
+ config CHECKPOINT_RESTORE
+-	bool "Checkpoint/restore support" if EXPERT
++	bool "Checkpoint/restore support"
+ 	select PROC_CHILDREN
+ 	default n
+ 	help
+@@ -889,7 +889,7 @@
+ 	  If unsure, say N here.
+ 
+ menuconfig NAMESPACES
+-	bool "Namespaces support" if EXPERT
++	bool "Namespaces support"
+ 	depends on MULTIUSER
+ 	default !EXPERT
+ 	help
+diff -urN linux-4.14-01/kernel/debug/kdb/kdb_main.c linux-4.14-02/kernel/debug/kdb/kdb_main.c
+--- linux-4.14-01/kernel/debug/kdb/kdb_main.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/debug/kdb/kdb_main.c	2018-01-29 14:51:49.830154715 +0000
+@@ -1970,7 +1970,7 @@
+ 		return KDB_ARGCOUNT;
+ 
+ 	kdb_trap_printk++;
+-	__handle_sysrq(*argv[1], check_mask);
++	__handle_sysrq(*argv[1], check_mask ? SYSRQ_FROM_KERNEL : 0);
+ 	kdb_trap_printk--;
+ 
+ 	return 0;
+diff -urN linux-4.14-01/kernel/kexec.c linux-4.14-02/kernel/kexec.c
+--- linux-4.14-01/kernel/kexec.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/kexec.c	2018-01-29 14:51:49.832154724 +0000
+@@ -202,6 +202,13 @@
+ 		return -EPERM;
+ 
+ 	/*
++	 * kexec can be used to circumvent module loading restrictions, so
++	 * prevent loading in that case
++	 */
++	if (kernel_is_locked_down("kexec of unsigned images"))
++		return -EPERM;
++
++	/*
+ 	 * Verify we have a legal set of flags
+ 	 * This leaves us room for future extensions.
+ 	 */
+diff -urN linux-4.14-01/kernel/kexec_file.c linux-4.14-02/kernel/kexec_file.c
+--- linux-4.14-01/kernel/kexec_file.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/kexec_file.c	2018-01-29 14:51:49.833154729 +0000
+@@ -255,6 +255,13 @@
+ 	if (!capable(CAP_SYS_BOOT) || kexec_load_disabled)
+ 		return -EPERM;
+ 
++	/* Don't permit images to be loaded into trusted kernels if we're not
++	 * going to verify the signature on them
++	 */
++	if (!IS_ENABLED(CONFIG_KEXEC_VERIFY_SIG) &&
++	    kernel_is_locked_down("kexec of unsigned images"))
++		return -EPERM;
++
+ 	/* Make sure we have a legal set of flags */
+ 	if (flags != (flags & KEXEC_FILE_FLAGS))
+ 		return -EINVAL;
+diff -urN linux-4.14-01/kernel/module.c linux-4.14-02/kernel/module.c
+--- linux-4.14-01/kernel/module.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/module.c	2018-01-29 14:51:49.832154724 +0000
+@@ -2781,7 +2781,8 @@
+ 	}
+ 
+ 	/* Not having a signature is only an error if we're strict. */
+-	if (err == -ENOKEY && !sig_enforce)
++	if (err == -ENOKEY && !sig_enforce &&
++	    !kernel_is_locked_down("Loading of unsigned modules"))
+ 		err = 0;
+ 
+ 	return err;
+diff -urN linux-4.14-01/kernel/module_signing.c linux-4.14-02/kernel/module_signing.c
+--- linux-4.14-01/kernel/module_signing.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/module_signing.c	2018-01-29 14:51:50.006155540 +0000
+@@ -81,6 +81,6 @@
+ 	}
+ 
+ 	return verify_pkcs7_signature(mod, modlen, mod + modlen, sig_len,
+-				      NULL, VERIFYING_MODULE_SIGNATURE,
++				      (void *)1UL, VERIFYING_MODULE_SIGNATURE,
+ 				      NULL, NULL);
+ }
+diff -urN linux-4.14-01/kernel/params.c linux-4.14-02/kernel/params.c
+--- linux-4.14-01/kernel/params.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/params.c	2018-01-29 14:51:49.838154752 +0000
+@@ -108,13 +108,19 @@
+ 	return parameqn(a, b, strlen(a)+1);
+ }
+ 
+-static void param_check_unsafe(const struct kernel_param *kp)
++static bool param_check_unsafe(const struct kernel_param *kp,
++			       const char *doing)
+ {
+ 	if (kp->flags & KERNEL_PARAM_FL_UNSAFE) {
+ 		pr_warn("Setting dangerous option %s - tainting kernel\n",
+ 			kp->name);
+ 		add_taint(TAINT_USER, LOCKDEP_STILL_OK);
+ 	}
++
++	if (kp->flags & KERNEL_PARAM_FL_HWPARAM &&
++	    kernel_is_locked_down("Command line-specified device addresses, irqs and dma channels"))
++		return false;
++	return true;
+ }
+ 
+ static int parse_one(char *param,
+@@ -144,8 +150,10 @@
+ 			pr_debug("handling %s with %p\n", param,
+ 				params[i].ops->set);
+ 			kernel_param_lock(params[i].mod);
+-			param_check_unsafe(&params[i]);
+-			err = params[i].ops->set(val, &params[i]);
++			if (param_check_unsafe(&params[i], doing))
++				err = params[i].ops->set(val, &params[i]);
++			else
++				err = -EPERM;
+ 			kernel_param_unlock(params[i].mod);
+ 			return err;
+ 		}
+@@ -553,6 +561,12 @@
+ 	return count;
+ }
+ 
++#ifdef CONFIG_MODULES
++#define mod_name(mod) (mod)->name
++#else
++#define mod_name(mod) "unknown"
++#endif
++
+ /* sysfs always hands a nul-terminated string in buf.  We rely on that. */
+ static ssize_t param_attr_store(struct module_attribute *mattr,
+ 				struct module_kobject *mk,
+@@ -565,8 +579,10 @@
+ 		return -EPERM;
+ 
+ 	kernel_param_lock(mk->mod);
+-	param_check_unsafe(attribute->param);
+-	err = attribute->param->ops->set(buf, attribute->param);
++	if (param_check_unsafe(attribute->param, mod_name(mk->mod)))
++		err = attribute->param->ops->set(buf, attribute->param);
++	else
++		err = -EPERM;
+ 	kernel_param_unlock(mk->mod);
+ 	if (!err)
+ 		return len;
+diff -urN linux-4.14-01/kernel/power/hibernate.c linux-4.14-02/kernel/power/hibernate.c
+--- linux-4.14-01/kernel/power/hibernate.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/power/hibernate.c	2018-01-29 14:51:49.833154729 +0000
+@@ -70,7 +70,7 @@
+ 
+ bool hibernation_available(void)
+ {
+-	return (nohibernate == 0);
++	return nohibernate == 0 && !kernel_is_locked_down("Hibernation");
+ }
+ 
+ /**
+diff -urN linux-4.14-01/kernel/power/user.c linux-4.14-02/kernel/power/user.c
+--- linux-4.14-01/kernel/power/user.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/kernel/power/user.c	2018-01-29 14:51:49.833154729 +0000
+@@ -52,6 +52,9 @@
+ 	if (!hibernation_available())
+ 		return -EPERM;
+ 
++	if (kernel_is_locked_down("/dev/snapshot"))
++		return -EPERM;
++
+ 	lock_system_sleep();
+ 
+ 	if (!atomic_add_unless(&snapshot_device_available, -1, 0)) {
+diff -urN linux-4.14-01/lib/Kconfig linux-4.14-02/lib/Kconfig
+--- linux-4.14-01/lib/Kconfig	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/lib/Kconfig	2018-01-29 14:51:49.736154274 +0000
+@@ -427,7 +427,8 @@
+ 	bool
+ 
+ config CPUMASK_OFFSTACK
+-	bool "Force CPU masks off stack" if DEBUG_PER_CPU_MAPS
++	bool "Force CPU masks off stack"
++	depends on SMP
+ 	help
+ 	  Use dynamic allocation for cpumask_var_t, instead of putting
+ 	  them on the stack.  This is a bit more expensive, but avoids
+diff -urN linux-4.14-01/lib/Kconfig.debug linux-4.14-02/lib/Kconfig.debug
+--- linux-4.14-01/lib/Kconfig.debug	2018-01-29 14:51:28.845061814 +0000
++++ linux-4.14-02/lib/Kconfig.debug	2018-01-29 14:51:49.768154424 +0000
+@@ -185,7 +185,23 @@
+ 	  Generate dwarf4 debug info. This requires recent versions
+ 	  of gcc and gdb. It makes the debug information larger.
+ 	  But it significantly improves the success of resolving
+-	  variables in gdb on optimized code.
++	  variables in gdb on optimized code.  The gcc docs also
++	  recommend enabling -fvar-tracking-assignments for maximum
++	  benefit. (see DEBUG_INFO_VTA)
++
++config DEBUG_INFO_VTA
++	bool "Enable var-tracking-assignments for debuginfo"
++	depends on DEBUG_INFO
++	help
++	  Enable gcc -fvar-tracking-assignments for improved debug
++	  information on variable locations in optimized code.  Per
++	  gcc, DEBUG_INFO_DWARF4 is recommended for best use of VTA.
++
++	  VTA has been implicated in codegen bugs (gcc PR61801,
++	  PR61904), so this may deserve some caution.  One can set
++	  GCC_COMPARE_DEBUG=-fvar-tracking-assignments-toggle in the
++	  environment to automatically compile everything both ways,
++	  generating an error if anything differs.
+ 
+ config GDB_SCRIPTS
+ 	bool "Provide GDB scripts for kernel debugging"
+diff -urN linux-4.14-01/Makefile linux-4.14-02/Makefile
+--- linux-4.14-01/Makefile	2018-01-29 14:51:28.379059757 +0000
++++ linux-4.14-02/Makefile	2018-01-29 14:51:49.768154424 +0000
+@@ -742,7 +742,11 @@
+ endif
+ endif
+ 
++ifdef CONFIG_DEBUG_INFO_VTA
++KBUILD_CFLAGS   += $(call cc-option, -fvar-tracking-assignments)
++else
+ KBUILD_CFLAGS   += $(call cc-option, -fno-var-tracking-assignments)
++endif
+ 
+ ifdef CONFIG_DEBUG_INFO
+ ifdef CONFIG_DEBUG_INFO_SPLIT
+diff -urN linux-4.14-01/net/dccp/proto.c linux-4.14-02/net/dccp/proto.c
+--- linux-4.14-01/net/dccp/proto.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/net/dccp/proto.c	2018-01-29 14:51:49.920155137 +0000
+@@ -259,6 +259,7 @@
+ {
+ 	struct inet_connection_sock *icsk = inet_csk(sk);
+ 	struct inet_sock *inet = inet_sk(sk);
++	struct dccp_sock *dp = dccp_sk(sk);
+ 	int err = 0;
+ 	const int old_state = sk->sk_state;
+ 
+@@ -278,6 +279,10 @@
+ 		sk->sk_err = ECONNRESET;
+ 
+ 	dccp_clear_xmit_timers(sk);
++	ccid_hc_rx_delete(dp->dccps_hc_rx_ccid, sk);
++	ccid_hc_tx_delete(dp->dccps_hc_tx_ccid, sk);
++	dp->dccps_hc_rx_ccid = NULL;
++	dp->dccps_hc_tx_ccid = NULL;
+ 
+ 	__skb_queue_purge(&sk->sk_receive_queue);
+ 	__skb_queue_purge(&sk->sk_write_queue);
+diff -urN linux-4.14-01/net/ipv4/raw.c linux-4.14-02/net/ipv4/raw.c
+--- linux-4.14-01/net/ipv4/raw.c	2018-01-29 14:51:28.854061854 +0000
++++ linux-4.14-02/net/ipv4/raw.c	2018-01-29 14:51:49.961155329 +0000
+@@ -57,6 +57,7 @@
+ #include <linux/in_route.h>
+ #include <linux/route.h>
+ #include <linux/skbuff.h>
++#include <linux/compiler.h>
+ #include <linux/igmp.h>
+ #include <net/net_namespace.h>
+ #include <net/dst.h>
+@@ -472,17 +473,17 @@
+ 		       struct sk_buff *skb)
+ {
+ 	struct raw_frag_vec *rfv = from;
++	char *rfv_buf;
+ 
+-	if (offset < rfv->hlen) {
++	if ((rfv_buf = nospec_array_ptr(rfv->hdr.c, offset, rfv->hlen))) {
+ 		int copy = min(rfv->hlen - offset, len);
+ 
+ 		if (skb->ip_summed == CHECKSUM_PARTIAL)
+-			memcpy(to, rfv->hdr.c + offset, copy);
++			memcpy(to, rfv_buf, copy);
+ 		else
+ 			skb->csum = csum_block_add(
+ 				skb->csum,
+-				csum_partial_copy_nocheck(rfv->hdr.c + offset,
+-							  to, copy, 0),
++				csum_partial_copy_nocheck(rfv_buf, to, copy, 0),
+ 				odd);
+ 
+ 		odd = 0;
+diff -urN linux-4.14-01/net/ipv6/raw.c linux-4.14-02/net/ipv6/raw.c
+--- linux-4.14-01/net/ipv6/raw.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/net/ipv6/raw.c	2018-01-29 14:51:49.961155329 +0000
+@@ -33,6 +33,7 @@
+ #include <linux/skbuff.h>
+ #include <linux/compat.h>
+ #include <linux/uaccess.h>
++#include <linux/compiler.h>
+ #include <asm/ioctls.h>
+ 
+ #include <net/net_namespace.h>
+@@ -725,17 +726,17 @@
+ 		       struct sk_buff *skb)
+ {
+ 	struct raw6_frag_vec *rfv = from;
++	char *rfv_buf;
+ 
+-	if (offset < rfv->hlen) {
++	if ((rfv_buf = nospec_array_ptr(rfv->c, offset, rfv->hlen))) {
+ 		int copy = min(rfv->hlen - offset, len);
+ 
+ 		if (skb->ip_summed == CHECKSUM_PARTIAL)
+-			memcpy(to, rfv->c + offset, copy);
++			memcpy(to, rfv_buf, copy);
+ 		else
+ 			skb->csum = csum_block_add(
+ 				skb->csum,
+-				csum_partial_copy_nocheck(rfv->c + offset,
+-							  to, copy, 0),
++				csum_partial_copy_nocheck(rfv_buf, to, copy, 0),
+ 				odd);
+ 
+ 		odd = 0;
+diff -urN linux-4.14-01/net/mpls/af_mpls.c linux-4.14-02/net/mpls/af_mpls.c
+--- linux-4.14-01/net/mpls/af_mpls.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/net/mpls/af_mpls.c	2018-01-29 14:51:49.962155333 +0000
+@@ -8,6 +8,7 @@
+ #include <linux/ipv6.h>
+ #include <linux/mpls.h>
+ #include <linux/netconf.h>
++#include <linux/compiler.h>
+ #include <linux/vmalloc.h>
+ #include <linux/percpu.h>
+ #include <net/ip.h>
+@@ -46,12 +47,13 @@
+ static struct mpls_route *mpls_route_input_rcu(struct net *net, unsigned index)
+ {
+ 	struct mpls_route *rt = NULL;
+-
+-	if (index < net->mpls.platform_labels) {
+-		struct mpls_route __rcu **platform_label =
+-			rcu_dereference(net->mpls.platform_label);
+-		rt = rcu_dereference(platform_label[index]);
+-	}
++	struct mpls_route __rcu **platform_label =
++		rcu_dereference(net->mpls.platform_label);
++	struct mpls_route __rcu **rtp;
++
++	if ((rtp = nospec_array_ptr(platform_label, index,
++					net->mpls.platform_labels)))
++		rt = rcu_dereference(*rtp);
+ 	return rt;
+ }
+ 
+diff -urN linux-4.14-01/net/netfilter/nfnetlink_cthelper.c linux-4.14-02/net/netfilter/nfnetlink_cthelper.c
+--- linux-4.14-01/net/netfilter/nfnetlink_cthelper.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/net/netfilter/nfnetlink_cthelper.c	2018-01-29 14:51:49.938155221 +0000
+@@ -17,6 +17,7 @@
+ #include <linux/types.h>
+ #include <linux/list.h>
+ #include <linux/errno.h>
++#include <linux/capability.h>
+ #include <net/netlink.h>
+ #include <net/sock.h>
+ 
+@@ -407,6 +408,9 @@
+ 	struct nfnl_cthelper *nlcth;
+ 	int ret = 0;
+ 
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if (!tb[NFCTH_NAME] || !tb[NFCTH_TUPLE])
+ 		return -EINVAL;
+ 
+@@ -611,6 +615,9 @@
+ 	struct nfnl_cthelper *nlcth;
+ 	bool tuple_set = false;
+ 
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if (nlh->nlmsg_flags & NLM_F_DUMP) {
+ 		struct netlink_dump_control c = {
+ 			.dump = nfnl_cthelper_dump_table,
+@@ -678,6 +685,9 @@
+ 	struct nfnl_cthelper *nlcth, *n;
+ 	int j = 0, ret;
+ 
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if (tb[NFCTH_NAME])
+ 		helper_name = nla_data(tb[NFCTH_NAME]);
+ 
+diff -urN linux-4.14-01/net/netfilter/xt_osf.c linux-4.14-02/net/netfilter/xt_osf.c
+--- linux-4.14-01/net/netfilter/xt_osf.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/net/netfilter/xt_osf.c	2018-01-29 14:51:49.928155174 +0000
+@@ -19,6 +19,7 @@
+ #include <linux/module.h>
+ #include <linux/kernel.h>
+ 
++#include <linux/capability.h>
+ #include <linux/if.h>
+ #include <linux/inetdevice.h>
+ #include <linux/ip.h>
+@@ -70,6 +71,9 @@
+ 	struct xt_osf_finger *kf = NULL, *sf;
+ 	int err = 0;
+ 
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if (!osf_attrs[OSF_ATTR_FINGER])
+ 		return -EINVAL;
+ 
+@@ -115,6 +119,9 @@
+ 	struct xt_osf_finger *sf;
+ 	int err = -ENOENT;
+ 
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if (!osf_attrs[OSF_ATTR_FINGER])
+ 		return -EINVAL;
+ 
+diff -urN linux-4.14-01/scripts/link-vmlinux.sh linux-4.14-02/scripts/link-vmlinux.sh
+--- linux-4.14-01/scripts/link-vmlinux.sh	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/scripts/link-vmlinux.sh	2018-01-29 14:51:49.724154218 +0000
+@@ -139,6 +139,10 @@
+ 			-lutil -lrt -lpthread
+ 		rm -f linux
+ 	fi
++	if [ -n "${AFTER_LINK}" ]; then
++		/usr/lib/rpm/debugedit -b ${RPM_BUILD_DIR} -d /usr/src/debug -i ${2} \
++			> ${2}.id
++	fi
+ }
+ 
+ 
+diff -urN linux-4.14-01/security/Kconfig linux-4.14-02/security/Kconfig
+--- linux-4.14-01/security/Kconfig	2018-01-29 14:51:28.868061916 +0000
++++ linux-4.14-02/security/Kconfig	2018-01-29 14:51:49.846154790 +0000
+@@ -216,6 +216,36 @@
+ 	  If you wish for all usermode helper programs to be disabled,
+ 	  specify an empty string here (i.e. "").
+ 
++config LOCK_DOWN_KERNEL
++	bool "Allow the kernel to be 'locked down'"
++	help
++	  Allow the kernel to be locked down under certain circumstances, for
++	  instance if UEFI secure boot is enabled.  Locking down the kernel
++	  turns off various features that might otherwise allow access to the
++	  kernel image (eg. setting MSR registers).
++
++config ALLOW_LOCKDOWN_LIFT_BY_SYSRQ
++	bool "Allow the kernel lockdown to be lifted by SysRq"
++	depends on LOCK_DOWN_KERNEL && MAGIC_SYSRQ
++	help
++	  Allow the lockdown on a kernel to be lifted, by pressing a SysRq key
++	  combination on a wired keyboard.
++
++config LOCK_DOWN_IN_EFI_SECURE_BOOT
++	bool "Lock down the kernel in EFI Secure Boot mode"
++	default n
++	select LOCK_DOWN_KERNEL
++	depends on EFI
++	help
++	  UEFI Secure Boot provides a mechanism for ensuring that the firmware
++	  will only load signed bootloaders and kernels.  Secure boot mode may
++	  be determined from EFI variables provided by the system firmware if
++	  not indicated by the boot parameters.
++
++	  Enabling this option turns on results in kernel lockdown being
++	  triggered if EFI Secure Boot is set.
++
++
+ source security/selinux/Kconfig
+ source security/smack/Kconfig
+ source security/tomoyo/Kconfig
+diff -urN linux-4.14-01/security/lock_down.c linux-4.14-02/security/lock_down.c
+--- linux-4.14-01/security/lock_down.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-4.14-02/security/lock_down.c	2018-01-29 14:51:49.846154790 +0000
+@@ -0,0 +1,108 @@
++/* Lock down the kernel
++ *
++ * Copyright (C) 2016 Red Hat, Inc. All Rights Reserved.
++ * Written by David Howells (dhowells@redhat.com)
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public Licence
++ * as published by the Free Software Foundation; either version
++ * 2 of the Licence, or (at your option) any later version.
++ */
++
++#include <linux/security.h>
++#include <linux/export.h>
++#include <linux/sysrq.h>
++#include <linux/efi.h>
++#include <asm/setup.h>
++
++#ifdef CONFIG_ALLOW_LOCKDOWN_LIFT_BY_SYSRQ
++static __read_mostly bool kernel_locked_down;
++#else
++static __ro_after_init bool kernel_locked_down;
++#endif
++
++/*
++ * Put the kernel into lock-down mode.
++ */
++static void __init lock_kernel_down(const char *where)
++{
++	if (!kernel_locked_down) {
++		kernel_locked_down = true;
++		pr_notice("Kernel is locked down from %s; see man kernel_lockdown.7\n",
++			  where);
++	}
++}
++
++static int __init lockdown_param(char *ignored)
++{
++	lock_kernel_down("command line");
++	return 0;
++}
++
++early_param("lockdown", lockdown_param);
++
++/*
++ * Lock the kernel down from very early in the arch setup.  This must happen
++ * prior to things like ACPI being initialised.
++ */
++void __init init_lockdown(void)
++{
++#ifdef CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT
++	if (efi_enabled(EFI_SECURE_BOOT))
++		lock_kernel_down("EFI secure boot");
++#endif
++}
++
++/**
++ * kernel_is_locked_down - Find out if the kernel is locked down
++ * @what: Tag to use in notice generated if lockdown is in effect
++ */
++bool __kernel_is_locked_down(const char *what, bool first)
++{
++	if (what && first && kernel_locked_down)
++		pr_notice("Lockdown: %s is restricted; see man kernel_lockdown.7\n",
++			  what);
++	return kernel_locked_down;
++}
++EXPORT_SYMBOL(__kernel_is_locked_down);
++
++#ifdef CONFIG_ALLOW_LOCKDOWN_LIFT_BY_SYSRQ
++
++/*
++ * Take the kernel out of lockdown mode.
++ */
++static void lift_kernel_lockdown(void)
++{
++	pr_notice("Lifting lockdown\n");
++	kernel_locked_down = false;
++}
++
++/*
++ * Allow lockdown to be lifted by pressing something like SysRq+x (and not by
++ * echoing the appropriate letter into the sysrq-trigger file).
++ */
++static void sysrq_handle_lockdown_lift(int key)
++{
++	if (kernel_locked_down)
++		lift_kernel_lockdown();
++}
++
++static struct sysrq_key_op lockdown_lift_sysrq_op = {
++	.handler	= sysrq_handle_lockdown_lift,
++	.help_msg	= "unSB(x)",
++	.action_msg	= "Disabling Secure Boot restrictions",
++	.enable_mask	= SYSRQ_DISABLE_USERSPACE,
++};
++
++static int __init lockdown_lift_sysrq(void)
++{
++	if (kernel_locked_down) {
++		lockdown_lift_sysrq_op.help_msg[5] = LOCKDOWN_LIFT_KEY;
++		register_sysrq_key(LOCKDOWN_LIFT_KEY, &lockdown_lift_sysrq_op);
++	}
++	return 0;
++}
++
++late_initcall(lockdown_lift_sysrq);
++
++#endif /* CONFIG_ALLOW_LOCKDOWN_LIFT_BY_SYSRQ */
+diff -urN linux-4.14-01/security/Makefile linux-4.14-02/security/Makefile
+--- linux-4.14-01/security/Makefile	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/security/Makefile	2018-01-29 14:51:49.828154705 +0000
+@@ -30,3 +30,6 @@
+ # Object integrity file lists
+ subdir-$(CONFIG_INTEGRITY)		+= integrity
+ obj-$(CONFIG_INTEGRITY)			+= integrity/
++
++# Allow the kernel to be locked down
++obj-$(CONFIG_LOCK_DOWN_KERNEL)		+= lock_down.o
+diff -urN linux-4.14-01/tools/iio/iio_event_monitor.c linux-4.14-02/tools/iio/iio_event_monitor.c
+--- linux-4.14-01/tools/iio/iio_event_monitor.c	2017-11-12 18:46:13.000000000 +0000
++++ linux-4.14-02/tools/iio/iio_event_monitor.c	2018-01-29 14:51:49.730154246 +0000
+@@ -26,7 +26,7 @@
+ #include <sys/ioctl.h>
+ #include "iio_utils.h"
+ #include <linux/iio/events.h>
+-#include <linux/iio/types.h>
++#include "../../include/uapi/linux/iio/types.h"
+ 
+ static const char * const iio_chan_type_name_spec[] = {
+ 	[IIO_VOLTAGE] = "voltage",
