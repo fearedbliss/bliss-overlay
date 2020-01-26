@@ -1,4 +1,4 @@
-# Copyright 1999-2018 Gentoo Foundation
+# Copyright 1999-2020 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=6
@@ -10,7 +10,7 @@ _LV="FC.01"                     # Local Version
 _PLV="${PV}-${_LV}"             # Package Version + Local Version (Module Dir)
 _KN="linux-${_PLV}"             # Kernel Directory Name
 _KD="/usr/src/${_KN}"           # Kernel Directory
-_BD="/boot/kernels/${_PLV}"     # Kernel /boot Directory
+_BD="/boot/"                    # Kernel /boot Directory
 
 # Main
 DESCRIPTION="Precompiled Vanilla Kernel (Kernel Ready-to-Eat [KRE])"
@@ -43,7 +43,7 @@ src_install()
 	)
 
 	for file in ${kfiles[*]}; do
-		newins "${S}/kernel/${file}" "${file%%-*}"
+		newins "${S}/kernel/${file}" "${file}"
 	done
 
 	# Install Modules

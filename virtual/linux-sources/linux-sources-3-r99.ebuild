@@ -11,7 +11,7 @@ IUSE="firmware"
 RDEPEND="
 	firmware? ( sys-kernel/linux-firmware )
 	|| (
-        sys-kernel/bliss-kernel
+        sys-kernel/bliss-kernel-bin
 		sys-kernel/gentoo-sources
 		sys-kernel/vanilla-sources
 		sys-kernel/ck-sources
