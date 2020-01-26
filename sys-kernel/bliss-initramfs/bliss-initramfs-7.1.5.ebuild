@@ -1,9 +1,9 @@
-# Copyright 1999-2018 Gentoo Foundation
+# Copyright 1999-2020 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=6
 
-PYTHON_COMPAT=( python{3_4,3_5,3_6} )
+PYTHON_COMPAT=( python{3_4,3_5,3_6,3_7,3_8} )
 inherit python-single-r1
 
 GITHUB_USER="fearedbliss"
@@ -16,7 +16,7 @@ SRC_URI="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/${GITHUB_TAG}.
 
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 RESTRICT="strip"
-LICENSE="BSD-2"
+LICENSE="Apache-2.0"
 SLOT="0"
 KEYWORDS="-* amd64"
 
@@ -38,7 +38,7 @@ src_install() {
 	cp -r "${S}/pkg" "${D}/opt/${PN}" || die
 
 	# Copy documentation files
-	dodoc README USAGE
+	dodoc README.md README-MORE USAGE
 
 	# Make a symbolic link: /sbin/bliss-initramfs
 	dosym "${EPREFIX}/opt/${PN}/${executable}" "/sbin/${PN}"
