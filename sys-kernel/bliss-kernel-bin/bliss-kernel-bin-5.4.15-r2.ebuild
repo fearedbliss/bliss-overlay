@@ -14,10 +14,14 @@ DESCRIPTION="Precompiled Vanilla Kernel (Kernel Ready-to-Eat [KRE])"
 HOMEPAGE="https://wiki.gentoo.org/wiki/User:Fearedbliss"
 SRC_URI="https://xyinn.org/gentoo/kernels/${_PLV}/kernel-${_PLV}.tar.xz"
 
-RESTRICT="mirror strip"
+RESTRICT="strip test"
 LICENSE="GPL-2"
 SLOT="${_PLV}"
 KEYWORDS="-* ~amd64"
+
+# Unset 'initramfs' since 'bliss-kernel' doesn't need them
+# as an explicitly enabled IUSE from the kernel-install eclass.
+IUSE="-initramfs"
 
 S="${WORKDIR}"
 QA_PREBUILT="*"

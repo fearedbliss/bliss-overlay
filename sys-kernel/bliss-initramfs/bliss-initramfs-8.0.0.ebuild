@@ -6,13 +6,9 @@ EAPI=7
 PYTHON_COMPAT=( python{3_6,3_7,3_8} )
 inherit python-single-r1
 
-GITHUB_USER="fearedbliss"
-GITHUB_REPO="bliss-initramfs"
-GITHUB_TAG="${PV}"
-
-DESCRIPTION="Boot your system's rootfs from OpenZFS/LUKS."
-HOMEPAGE="https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
-SRC_URI="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/${GITHUB_TAG}.tar.gz -> ${P}.tar.gz"
+DESCRIPTION="Boot your system's rootfs from OpenZFS/LUKS"
+HOMEPAGE="https://github.com/fearedbliss/bliss-initramfs"
+SRC_URI="https://github.com/fearedbliss/${PN}/archive/${PV}.tar.gz -> ${P}.tar.gz"
 
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 RESTRICT="strip"
@@ -25,7 +21,7 @@ RDEPEND="
 	app-arch/cpio
 	virtual/udev"
 
-S="${WORKDIR}/${GITHUB_REPO}-${GITHUB_TAG}"
+S="${WORKDIR}/${PN}-${PV}"
 
 src_install() {
 	# Copy the main executable
@@ -40,6 +36,6 @@ src_install() {
 	# Copy documentation files
 	dodoc README.md README-MORE USAGE
 
-	# Make a symbolic link: /sbin/bliss-initramfs
-	dosym "${EPREFIX}/opt/${PN}/${executable}" "/sbin/${PN}"
+	# Make a relative symbolic link: /sbin/bliss-initramfs
+	dosym "../opt/${PN}/${executable}" "/sbin/${PN}"
 }
