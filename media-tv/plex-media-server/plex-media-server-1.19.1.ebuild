@@ -4,21 +4,21 @@
 EAPI=7
 
 PYTHON_COMPAT=( python2_7 )
+
 inherit eutils systemd unpacker pax-utils python-single-r1
 
-MINOR_VERSION="2571-e106a8a91"
-
+_MINOR_VERSION="2645-ccb6eb67e"
+_FULL_VERSION="${PV}.${_MINOR_VERSION}"
 _APPNAME="plexmediaserver"
 _USERNAME="plex"
 _SHORTNAME="${_USERNAME}"
-_FULL_VERSION="${PV}.${MINOR_VERSION}"
 
 URI="https://downloads.plex.tv/plex-media-server-new"
 
 DESCRIPTION="A free media library that is intended for use with a plex client"
 HOMEPAGE="https://www.plex.tv/"
 SRC_URI="
-	amd64? ( ${URI}/${_FULL_VERSION}/debian/plexmediaserver_${_FULL_VERSION}_amd64.deb )
+	amd64? ( ${URI}/${_FULL_VERSION}/debian/${_APPNAME}_${_FULL_VERSION}_amd64.deb )
 "
 SLOT="0"
 LICENSE="Plex"
@@ -26,10 +26,6 @@ RESTRICT="bindist strip"
 KEYWORDS="-* ~amd64"
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
-DEPEND="
-	$(python_gen_cond_dep '
-		dev-python/virtualenv[${PYTHON_MULTI_USEDEP}]
-	')"
 BDEPEND="dev-util/patchelf"
 
 RDEPEND="
@@ -38,7 +34,7 @@ RDEPEND="
 	net-dns/avahi
 	${PYTHON_DEPS}"
 
-QA_DESKTOP_FILE="usr/share/applications/plexmediamanager.desktop"
+QA_DESKTOP_FILE="usr/share/applications/${_APPNAME}.desktop"
 QA_PREBUILT="*"
 QA_MULTILIB_PATHS=(
 	"usr/lib/${_APPNAME}/.*"
@@ -46,13 +42,12 @@ QA_MULTILIB_PATHS=(
 )
 
 BINS_TO_PAX_MARK=(
-	"${ED}/usr/lib/plexmediaserver/Plex Script Host"
-	"${ED}/usr/lib/plexmediaserver/Plex Media Scanner"
+	"${ED}/usr/lib/${_APPNAME}/Plex Script Host"
+	"${ED}/usr/lib/${_APPNAME}/Plex Media Scanner"
 )
 
 S="${WORKDIR}"
 PATCHES=(
-	"${FILESDIR}/virtualenv_start_pms_${PV}.patch"
 	"${FILESDIR}/plexmediamanager_desktop_${PV}.patch"
 )
 
@@ -84,26 +79,21 @@ src_install() {
 	_mask_plex_libraries_revdep
 
 	# Fix RPATH
-	patchelf --force-rpath --set-rpath '$ORIGIN:$ORIGIN/../../../../../../lib' "${ED}"/usr/lib/plexmediaserver/Resources/Python/lib/python2.7/lib-dynload/_codecs_kr.so || die
+	patchelf --force-rpath --set-rpath '$ORIGIN:$ORIGIN/../../../../../../lib' \
+			"${ED}/usr/lib/${_APPNAME}/Resources/Python/lib/python2.7/lib-dynload/_codecs_kr.so" || die
 
 	# Install systemd service file
-	systemd_newunit "${FILESDIR}/systemd/${PN}.service" "${PN}.service"
+	systemd_newunit "${ED}/usr/lib/${_APPNAME}/lib/${_APPNAME}.service" "${_APPNAME}.service"
 
 	# Add pax markings to some binaries so that they work on hardened setup
 	for f in "${BINS_TO_PAX_MARK[@]}"; do
 		pax-mark m "${f}"
 	done
-
-	einfo "Configuring virtualenv"
-	virtualenv -v --no-pip --no-setuptools --no-wheel "${ED}"/usr/lib/plexmediaserver/Resources/Python || die
-	pushd "${ED}"/usr/lib/plexmediaserver/Resources/Python &>/dev/null || die
-	find . -type f -exec sed -i -e "s#${D}##g" {} + || die
-	popd &>/dev/null || die
 }
 
 pkg_postinst() {
 	elog "Plex Media Server is now installed!"
-	elog "To start the Plex Server, run 'systemctl start plex-media-server',"
+	elog "To start the Plex Server, run 'systemctl start ${_APPNAME}',"
 	elog "you will then be able to access your library at"
 	elog "http://<ip>:32400/web/"
 }
@@ -118,5 +108,5 @@ _mask_plex_libraries_revdep() {
 	# on the implicit symlink automatically satisfying our revdep requirement when we use $(get_libdir).
 	# Thus we will match upstream's directory automatically. If upstream switches their location,
 	# then so should we.
-	echo "SEARCH_DIRS_MASK=\"${EPREFIX}/usr/lib/plexmediaserver\"" > "${ED}"/etc/revdep-rebuild/80plexmediaserver
+	echo "SEARCH_DIRS_MASK=\"${EPREFIX}/usr/lib/${_APPNAME}\"" > "${ED}"/etc/revdep-rebuild/80plexmediaserver
 }
