@@ -7,7 +7,7 @@ PYTHON_COMPAT=( python2_7 )
 
 inherit eutils systemd unpacker pax-utils python-single-r1
 
-_MINOR_VERSION="2645-ccb6eb67e"
+_MINOR_VERSION="2737-b69929dab"
 _FULL_VERSION="${PV}.${_MINOR_VERSION}"
 _APPNAME="plexmediaserver"
 _USERNAME="plex"
@@ -23,7 +23,7 @@ SRC_URI="
 SLOT="0"
 LICENSE="Plex"
 RESTRICT="bindist strip"
-KEYWORDS="-* amd64"
+KEYWORDS="-* ~amd64"
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
 BDEPEND="dev-util/patchelf"
