@@ -23,7 +23,7 @@ SRC_URI="
 SLOT="0"
 LICENSE="Plex"
 RESTRICT="bindist strip"
-KEYWORDS="-* ~amd64"
+KEYWORDS="-* amd64"
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
 BDEPEND="dev-util/patchelf"
